@@ -29,27 +29,27 @@ function getStatusInfo(status: SessionStatus): {
   step?: string;
   iteration?: number;
 } {
-  if (status === "Created") return { label: "Ready", color: "#6b7280" };
-  if (status === "Stopped") return { label: "Stopped", color: "#6b7280" };
+  if (status === "Created") return { label: "Ready", color: "var(--status-idle)" };
+  if (status === "Stopped") return { label: "Stopped", color: "var(--status-idle)" };
   if (typeof status === "object") {
     if ("Running" in status)
       return {
         label: "Running",
-        color: "#4ade80",
+        color: "var(--status-running)",
         step: getStepLabel(status.Running.step),
         iteration: status.Running.iteration,
       };
     if ("Stopping" in status)
       return {
         label: "Stopping",
-        color: "#fbbf24",
+        color: "var(--status-stopping)",
         step: getStepLabel(status.Stopping.step),
         iteration: status.Stopping.iteration,
       };
     if ("Failed" in status)
-      return { label: `Failed: ${status.Failed.error}`, color: "#f87171" };
+      return { label: `Failed: ${status.Failed.error}`, color: "var(--status-failed)" };
   }
-  return { label: "Unknown", color: "#6b7280" };
+  return { label: "Unknown", color: "var(--status-idle)" };
 }
 
 export function StatusBar({
@@ -68,10 +68,10 @@ export function StatusBar({
         alignItems: "center",
         gap: "16px",
         padding: "6px 12px",
-        backgroundColor: "#161b22",
-        borderTop: "1px solid #30363d",
+        backgroundColor: "var(--bg-secondary)",
+        borderTop: "1px solid var(--border-primary)",
         fontSize: "12px",
-        color: "#8b949e",
+        color: "var(--text-secondary)",
       }}
     >
       <span>

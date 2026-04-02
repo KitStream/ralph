@@ -13,10 +13,10 @@ export function RecoveryDialog({ request }: RecoveryDialogProps) {
   return (
     <div style={overlayStyle}>
       <div style={dialogStyle}>
-        <h3 style={{ margin: "0 0 8px", color: "#f87171" }}>
+        <h3 style={{ margin: "0 0 8px", color: "var(--status-failed)" }}>
           Action Required
         </h3>
-        <p style={{ color: "#e6edf3", fontSize: 13, margin: "0 0 16px" }}>
+        <p style={{ color: "var(--text-primary)", fontSize: 13, margin: "0 0 16px" }}>
           The session encountered an error and needs your input to continue:
         </p>
         <pre style={errorStyle}>{request.error}</pre>
@@ -28,15 +28,15 @@ export function RecoveryDialog({ request }: RecoveryDialogProps) {
               style={{
                 ...optionBtnStyle,
                 borderColor:
-                  option.id === "reset" ? "#da3633" :
-                  option.id === "abort" ? "#6e7681" :
-                  "#238636",
+                  option.id === "reset" ? "var(--accent-red)" :
+                  option.id === "abort" ? "var(--text-muted)" :
+                  "var(--accent-green)",
               }}
             >
-              <div style={{ fontWeight: 500, fontSize: 13, color: "#e6edf3" }}>
+              <div style={{ fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>
                 {option.label}
               </div>
-              <div style={{ fontSize: 11, color: "#8b949e" }}>
+              <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                 {option.description}
               </div>
             </button>
@@ -53,7 +53,7 @@ const overlayStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: "rgba(0,0,0,0.6)",
+  backgroundColor: "var(--overlay-bg)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -61,8 +61,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const dialogStyle: React.CSSProperties = {
-  backgroundColor: "#161b22",
-  border: "1px solid #da3633",
+  backgroundColor: "var(--bg-secondary)",
+  border: "1px solid var(--accent-red)",
   borderRadius: 8,
   padding: 24,
   width: 460,
@@ -71,11 +71,11 @@ const dialogStyle: React.CSSProperties = {
 };
 
 const errorStyle: React.CSSProperties = {
-  backgroundColor: "#0d1117",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   padding: 12,
-  color: "#f87171",
+  color: "var(--status-failed)",
   fontSize: 12,
   fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
   whiteSpace: "pre-wrap",
@@ -87,8 +87,8 @@ const errorStyle: React.CSSProperties = {
 
 const optionBtnStyle: React.CSSProperties = {
   padding: "10px 14px",
-  backgroundColor: "#0d1117",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   textAlign: "left",

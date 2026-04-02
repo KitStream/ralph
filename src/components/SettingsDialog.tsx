@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useSessions } from "../hooks/useSessions";
-import type { AppSettings, LayoutMode } from "../lib/types";
+import type { AppSettings, LayoutMode, ThemeMode } from "../lib/types";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -40,10 +40,54 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     },
   ];
 
+  const themes: { value: ThemeMode; label: string }[] = [
+    { value: "Dark", label: "Dark" },
+    { value: "Light", label: "Light" },
+  ];
+
   return (
     <div style={overlayStyle}>
       <div style={dialogStyle}>
-        <h2 style={{ margin: "0 0 16px", color: "#e6edf3" }}>Settings</h2>
+        <h2 style={{ margin: "0 0 16px", color: "var(--text-primary)" }}>Settings</h2>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>Theme</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {themes.map((t) => (
+              <label
+                key={t.value}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  cursor: "pointer",
+                  padding: "8px 16px",
+                  borderRadius: 6,
+                  border:
+                    settings.theme === t.value
+                      ? "1px solid var(--accent-blue)"
+                      : "1px solid var(--border-primary)",
+                  backgroundColor:
+                    settings.theme === t.value ? "var(--bg-selected)" : "transparent",
+                  color: "var(--text-primary)",
+                  flex: 1,
+                  justifyContent: "center",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="theme"
+                  value={t.value}
+                  checked={settings.theme === t.value}
+                  onChange={() =>
+                    setSettings({ ...settings, theme: t.value })
+                  }
+                />
+                <span style={{ fontWeight: 500, fontSize: 13 }}>{t.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
 
         <div style={fieldStyle}>
           <label style={labelStyle}>Layout Mode</label>
@@ -60,11 +104,11 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                   borderRadius: 6,
                   border:
                     settings.layout === l.value
-                      ? "1px solid #58a6ff"
-                      : "1px solid #30363d",
+                      ? "1px solid var(--accent-blue)"
+                      : "1px solid var(--border-primary)",
                   backgroundColor:
-                    settings.layout === l.value ? "#1f2937" : "transparent",
-                  color: "#e6edf3",
+                    settings.layout === l.value ? "var(--bg-selected)" : "transparent",
+                  color: "var(--text-primary)",
                 }}
               >
                 <input
@@ -78,7 +122,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 />
                 <div>
                   <div style={{ fontWeight: 500, fontSize: 13 }}>{l.label}</div>
-                  <div style={{ fontSize: 11, color: "#8b949e" }}>{l.desc}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{l.desc}</div>
                 </div>
               </label>
             ))}
@@ -115,7 +159,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         <div style={fieldStyle}>
           <label
             style={{
-              color: "#8b949e",
+              color: "var(--text-secondary)",
               display: "flex",
               alignItems: "center",
               gap: 6,
@@ -162,7 +206,7 @@ const overlayStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: "rgba(0,0,0,0.6)",
+  backgroundColor: "var(--overlay-bg)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -170,8 +214,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const dialogStyle: React.CSSProperties = {
-  backgroundColor: "#161b22",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-secondary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 8,
   padding: 24,
   width: 420,
@@ -183,7 +227,7 @@ const fieldStyle: React.CSSProperties = { marginBottom: 16 };
 
 const labelStyle: React.CSSProperties = {
   display: "block",
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   fontSize: 12,
   marginBottom: 6,
 };
@@ -191,19 +235,19 @@ const labelStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "6px 10px",
-  backgroundColor: "#0d1117",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
-  color: "#e6edf3",
+  color: "var(--text-primary)",
   fontSize: 13,
   boxSizing: "border-box",
 };
 
 const cancelBtnStyle: React.CSSProperties = {
   padding: "6px 16px",
-  backgroundColor: "#21262d",
-  color: "#e6edf3",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 13,
@@ -211,7 +255,7 @@ const cancelBtnStyle: React.CSSProperties = {
 
 const saveBtnStyle: React.CSSProperties = {
   padding: "6px 16px",
-  backgroundColor: "#238636",
+  backgroundColor: "var(--accent-green)",
   color: "#fff",
   border: "none",
   borderRadius: 6,

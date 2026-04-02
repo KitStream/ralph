@@ -163,6 +163,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     activeSessionId: null,
     settings: {
       layout: "Sidebar",
+      theme: "Dark",
       default_ai_tool: "claude",
       default_main_branch: "main",
       default_tagging_enabled: true,

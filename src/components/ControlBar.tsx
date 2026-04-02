@@ -33,32 +33,32 @@ export function ControlBar({
         alignItems: "center",
         gap: "8px",
         padding: "8px 12px",
-        backgroundColor: "#161b22",
-        borderBottom: "1px solid #30363d",
+        backgroundColor: "var(--bg-secondary)",
+        borderBottom: "1px solid var(--border-primary)",
       }}
     >
       {!running && (
-        <button onClick={onStart} style={btnStyle("#238636")} title="Start the autonomous coding loop">
+        <button onClick={onStart} style={btnStyle("var(--accent-green)")} title="Start the autonomous coding loop">
           Start
         </button>
       )}
       {running && !stopping && (
-        <button onClick={onStop} style={btnStyle("#d29922")} title="Stop gracefully after the current iteration finishes (commits will be pushed)">
+        <button onClick={onStop} style={btnStyle("var(--accent-yellow)")} title="Stop gracefully after the current iteration finishes (commits will be pushed)">
           Stop
         </button>
       )}
       {running && (
-        <button onClick={onAbort} style={btnStyle("#da3633")} title="Abort immediately — kills the AI process and stops the loop now">
+        <button onClick={onAbort} style={btnStyle("var(--accent-red)")} title="Abort immediately — kills the AI process and stops the loop now">
           Abort
         </button>
       )}
       {!running && (
-        <button onClick={onRemove} style={btnStyle("#6e7681")} title="Remove this session">
+        <button onClick={onRemove} style={btnStyle("var(--text-muted)")} title="Remove this session">
           Remove
         </button>
       )}
       {stopping && (
-        <span style={{ color: "#fbbf24", fontSize: "12px" }}>
+        <span style={{ color: "var(--status-stopping)", fontSize: "12px" }}>
           Stopping after current iteration...
         </span>
       )}

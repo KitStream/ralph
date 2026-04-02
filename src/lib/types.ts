@@ -67,6 +67,7 @@ export interface AiToolInfo {
 
 export interface AppSettings {
   layout: LayoutMode;
+  theme: ThemeMode;
   default_ai_tool: string;
   default_main_branch: string;
   default_tagging_enabled: boolean;
@@ -75,6 +76,7 @@ export interface AppSettings {
 }
 
 export type LayoutMode = "Sidebar" | "Tabs" | "Split";
+export type ThemeMode = "Dark" | "Light";
 
 export interface SessionEvent {
   session_id: string;

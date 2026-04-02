@@ -2,12 +2,12 @@ import { useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogEntry, LogCategory } from "../lib/types";
 
-const categoryColors: Record<LogCategory, string> = {
-  Git: "#56d4dd",
-  Ai: "#4ade80",
-  Script: "#c084fc",
-  Warning: "#fbbf24",
-  Error: "#f87171",
+const categoryColorVars: Record<LogCategory, string> = {
+  Git: "var(--log-git)",
+  Ai: "var(--log-ai)",
+  Script: "var(--log-script)",
+  Warning: "var(--log-warning)",
+  Error: "var(--log-error)",
 };
 
 interface LogViewProps {
@@ -47,7 +47,7 @@ export function LogView({ logs }: LogViewProps) {
       style={{
         flex: 1,
         overflow: "auto",
-        backgroundColor: "#0d1117",
+        backgroundColor: "var(--bg-primary)",
         fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
         fontSize: "13px",
         lineHeight: "20px",
@@ -74,7 +74,7 @@ export function LogView({ logs }: LogViewProps) {
                 left: 0,
                 width: "100%",
                 transform: `translateY(${virtualRow.start}px)`,
-                color: categoryColors[log.category],
+                color: categoryColorVars[log.category],
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-all",
                 paddingBottom: 2,
@@ -86,7 +86,7 @@ export function LogView({ logs }: LogViewProps) {
         })}
       </div>
       {logs.length === 0 && (
-        <div style={{ color: "#6b7280", fontStyle: "italic", padding: "16px" }}>
+        <div style={{ color: "var(--text-muted)", fontStyle: "italic", padding: "16px" }}>
           No log output yet. Start the session to begin.
         </div>
       )}

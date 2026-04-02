@@ -101,13 +101,13 @@ export function NewSessionDialog({
   return (
     <div style={overlayStyle}>
       <div style={dialogStyle}>
-        <h2 style={{ margin: "0 0 16px", color: "#e6edf3" }}>New Session</h2>
+        <h2 style={{ margin: "0 0 16px", color: "var(--text-primary)" }}>New Session</h2>
 
         <div style={fieldStyle}>
           <label style={labelStyle}>Project Directory</label>
           {state.settings.recent_project_dirs.length > 0 && !projectDir && (
             <div style={{ marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#6b7280" }}>Recent:</span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Recent:</span>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
                 {state.settings.recent_project_dirs.map((dir) => (
                   <button
@@ -115,9 +115,9 @@ export function NewSessionDialog({
                     onClick={() => setProjectDir(dir)}
                     style={{
                       padding: "2px 8px",
-                      backgroundColor: "#21262d",
-                      color: "#8b949e",
-                      border: "1px solid #30363d",
+                      backgroundColor: "var(--bg-tertiary)",
+                      color: "var(--text-secondary)",
+                      border: "1px solid var(--border-primary)",
                       borderRadius: 4,
                       cursor: "pointer",
                       fontSize: 11,
@@ -247,7 +247,7 @@ export function NewSessionDialog({
         </div>
 
         <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-          <label style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
             <input
               type="checkbox"
               checked={taggingEnabled}
@@ -255,7 +255,7 @@ export function NewSessionDialog({
             />
             Enable tagging
           </label>
-          <label style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
             <input
               type="checkbox"
               checked={autoStart}
@@ -292,7 +292,7 @@ const overlayStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: "rgba(0,0,0,0.6)",
+  backgroundColor: "var(--overlay-bg)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -300,8 +300,8 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const dialogStyle: React.CSSProperties = {
-  backgroundColor: "#161b22",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-secondary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 8,
   padding: 24,
   width: 480,
@@ -315,7 +315,7 @@ const fieldStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   display: "block",
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   fontSize: 12,
   marginBottom: 4,
 };
@@ -323,10 +323,10 @@ const labelStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "6px 10px",
-  backgroundColor: "#0d1117",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
-  color: "#e6edf3",
+  color: "var(--text-primary)",
   fontSize: 13,
   boxSizing: "border-box",
 };
@@ -338,7 +338,7 @@ const clearBtnStyle: React.CSSProperties = {
   transform: "translateY(-50%)",
   background: "none",
   border: "none",
-  color: "#6b7280",
+  color: "var(--text-muted)",
   cursor: "pointer",
   fontSize: 16,
   padding: "0 4px",
@@ -347,9 +347,9 @@ const clearBtnStyle: React.CSSProperties = {
 
 const pickBtnStyle: React.CSSProperties = {
   padding: "6px 12px",
-  backgroundColor: "#21262d",
-  color: "#e6edf3",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 13,
@@ -357,9 +357,9 @@ const pickBtnStyle: React.CSSProperties = {
 
 const cancelBtnStyle: React.CSSProperties = {
   padding: "6px 16px",
-  backgroundColor: "#21262d",
-  color: "#e6edf3",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 13,
@@ -367,7 +367,7 @@ const cancelBtnStyle: React.CSSProperties = {
 
 const createBtnStyle: React.CSSProperties = {
   padding: "6px 16px",
-  backgroundColor: "#238636",
+  backgroundColor: "var(--accent-green)",
   color: "#fff",
   border: "none",
   borderRadius: 6,

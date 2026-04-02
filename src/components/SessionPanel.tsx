@@ -18,8 +18,8 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#6b7280",
-          backgroundColor: "#0d1117",
+          color: "var(--text-muted)",
+          backgroundColor: "var(--bg-primary)",
         }}
       >
         No session selected. Create one to get started.

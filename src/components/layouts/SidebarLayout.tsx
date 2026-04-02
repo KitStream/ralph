@@ -23,8 +23,8 @@ export function SidebarLayout({
         style={{
           width: 200,
           minWidth: 160,
-          backgroundColor: "#0d1117",
-          borderRight: "1px solid #30363d",
+          backgroundColor: "var(--bg-primary)",
+          borderRight: "1px solid var(--border-primary)",
           display: "flex",
           flexDirection: "column",
         }}
@@ -32,13 +32,13 @@ export function SidebarLayout({
         <div
           style={{
             padding: "12px",
-            borderBottom: "1px solid #30363d",
+            borderBottom: "1px solid var(--border-primary)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
           }}
         >
-          <span style={{ color: "#e6edf3", fontWeight: 600, fontSize: 14 }}>
+          <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14 }}>
             Ralph
           </span>
           <button onClick={onOpenSettings} style={iconBtnStyle} title="Settings">
@@ -69,7 +69,7 @@ export function SidebarLayout({
 const iconBtnStyle: React.CSSProperties = {
   background: "none",
   border: "none",
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   cursor: "pointer",
   fontSize: 16,
   padding: 4,
@@ -78,9 +78,9 @@ const iconBtnStyle: React.CSSProperties = {
 const newBtnStyle: React.CSSProperties = {
   width: "100%",
   padding: "6px 0",
-  backgroundColor: "#21262d",
-  color: "#e6edf3",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 13,

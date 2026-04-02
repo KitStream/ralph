@@ -23,8 +23,8 @@ export function TabsLayout({
         style={{
           display: "flex",
           alignItems: "center",
-          backgroundColor: "#0d1117",
-          borderBottom: "1px solid #30363d",
+          backgroundColor: "var(--bg-primary)",
+          borderBottom: "1px solid var(--border-primary)",
         }}
       >
         <SessionList
@@ -51,7 +51,7 @@ const addTabBtnStyle: React.CSSProperties = {
   padding: "6px 12px",
   background: "none",
   border: "none",
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   cursor: "pointer",
   fontSize: 18,
 };
@@ -60,7 +60,7 @@ const settingsBtnStyle: React.CSSProperties = {
   padding: "6px 12px",
   background: "none",
   border: "none",
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   cursor: "pointer",
   fontSize: 16,
 };

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub layout: LayoutMode,
+    #[serde(default = "default_theme")]
+    pub theme: ThemeMode,
     pub default_ai_tool: String,
     pub default_main_branch: String,
     pub default_tagging_enabled: bool,
@@ -10,6 +12,16 @@ pub struct AppSettings {
     pub recent_project_dirs: Vec<String>,
     #[serde(default)]
     pub recent_preambles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+fn default_theme() -> ThemeMode {
+    ThemeMode::Dark
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,6 +35,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             layout: LayoutMode::Sidebar,
+            theme: ThemeMode::Dark,
             default_ai_tool: "claude".to_string(),
             default_main_branch: "main".to_string(),
             default_tagging_enabled: true,

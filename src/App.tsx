@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useSessions } from "./hooks/useSessions";
 import { SidebarLayout } from "./components/layouts/SidebarLayout";
 import { TabsLayout } from "./components/layouts/TabsLayout";
@@ -12,6 +12,13 @@ function App() {
   const { state, setActiveSession } = useSessions();
   const [showNewSession, setShowNewSession] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute(
+      "data-theme",
+      state.settings.theme.toLowerCase()
+    );
+  }, [state.settings.theme]);
 
   const sessions: SessionState[] = useMemo(
     () => Array.from(state.sessions.values()),

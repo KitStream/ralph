@@ -24,11 +24,11 @@ export function SplitLayout({
           justifyContent: "space-between",
           alignItems: "center",
           padding: "6px 12px",
-          backgroundColor: "#0d1117",
-          borderBottom: "1px solid #30363d",
+          backgroundColor: "var(--bg-primary)",
+          borderBottom: "1px solid var(--border-primary)",
         }}
       >
-        <span style={{ color: "#e6edf3", fontWeight: 600, fontSize: 14 }}>
+        <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14 }}>
           Ralph
         </span>
         <div style={{ display: "flex", gap: 8 }}>
@@ -47,7 +47,7 @@ export function SplitLayout({
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, 1fr)`,
           gap: 1,
-          backgroundColor: "#30363d",
+          backgroundColor: "var(--grid-gap)",
           overflow: "auto",
         }}
       >
@@ -58,7 +58,7 @@ export function SplitLayout({
               display: "flex",
               flexDirection: "column",
               minHeight: 300,
-              backgroundColor: "#0d1117",
+              backgroundColor: "var(--bg-primary)",
             }}
           >
             <SessionPanel sessionId={session.id} />
@@ -70,8 +70,8 @@ export function SplitLayout({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#6b7280",
-              backgroundColor: "#0d1117",
+              color: "var(--text-muted)",
+              backgroundColor: "var(--bg-primary)",
               gridColumn: "1 / -1",
               minHeight: 300,
             }}
@@ -86,9 +86,9 @@ export function SplitLayout({
 
 const topBtnStyle: React.CSSProperties = {
   padding: "4px 10px",
-  backgroundColor: "#21262d",
-  color: "#e6edf3",
-  border: "1px solid #30363d",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 12,

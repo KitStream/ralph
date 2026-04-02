@@ -8,14 +8,14 @@ interface SessionListProps {
 }
 
 function statusDotColor(status: SessionStatus): string {
-  if (status === "Created") return "#6b7280";
-  if (status === "Stopped") return "#6b7280";
+  if (status === "Created") return "var(--status-idle)";
+  if (status === "Stopped") return "var(--status-idle)";
   if (typeof status === "object") {
-    if ("Running" in status) return "#4ade80";
-    if ("Stopping" in status) return "#fbbf24";
-    if ("Failed" in status) return "#f87171";
+    if ("Running" in status) return "var(--status-running)";
+    if ("Stopping" in status) return "var(--status-stopping)";
+    if ("Failed" in status) return "var(--status-failed)";
   }
-  return "#6b7280";
+  return "var(--status-idle)";
 }
 
 function isRunning(status: SessionStatus): boolean {
@@ -51,18 +51,18 @@ export function SessionList({
               gap: 8,
               padding: isHorizontal ? "6px 12px" : "8px 12px",
               cursor: "pointer",
-              backgroundColor: isActive ? "#1f2937" : "transparent",
+              backgroundColor: isActive ? "var(--bg-selected)" : "transparent",
               borderBottom: isHorizontal
                 ? isActive
-                  ? "2px solid #58a6ff"
+                  ? "2px solid var(--accent-blue)"
                   : "2px solid transparent"
                 : undefined,
               borderLeft: !isHorizontal
                 ? isActive
-                  ? "3px solid #58a6ff"
+                  ? "3px solid var(--accent-blue)"
                   : "3px solid transparent"
                 : undefined,
-              color: "#e6edf3",
+              color: "var(--text-primary)",
               fontSize: 13,
               whiteSpace: "nowrap",
               minWidth: isHorizontal ? 100 : undefined,
@@ -87,8 +87,8 @@ export function SessionList({
               <span
                 style={{
                   fontSize: 11,
-                  color: "#8b949e",
-                  backgroundColor: "#21262d",
+                  color: "var(--text-secondary)",
+                  backgroundColor: "var(--badge-bg)",
                   padding: "1px 6px",
                   borderRadius: 10,
                 }}
