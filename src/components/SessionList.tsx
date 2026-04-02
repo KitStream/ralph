@@ -1,0 +1,104 @@
+import type { SessionState, SessionStatus } from "../lib/types";
+
+interface SessionListProps {
+  sessions: SessionState[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  orientation?: "vertical" | "horizontal";
+}
+
+function statusDotColor(status: SessionStatus): string {
+  if (status === "Created") return "#6b7280";
+  if (status === "Stopped") return "#6b7280";
+  if (typeof status === "object") {
+    if ("Running" in status) return "#4ade80";
+    if ("Stopping" in status) return "#fbbf24";
+    if ("Failed" in status) return "#f87171";
+  }
+  return "#6b7280";
+}
+
+function isRunning(status: SessionStatus): boolean {
+  return typeof status === "object" && ("Running" in status || "Stopping" in status);
+}
+
+export function SessionList({
+  sessions,
+  activeId,
+  onSelect,
+  orientation = "vertical",
+}: SessionListProps) {
+  const isHorizontal = orientation === "horizontal";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: isHorizontal ? "row" : "column",
+        gap: isHorizontal ? 0 : 2,
+        overflow: "auto",
+      }}
+    >
+      {sessions.map((session) => {
+        const isActive = session.id === activeId;
+        return (
+          <div
+            key={session.id}
+            onClick={() => onSelect(session.id)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: isHorizontal ? "6px 12px" : "8px 12px",
+              cursor: "pointer",
+              backgroundColor: isActive ? "#1f2937" : "transparent",
+              borderBottom: isHorizontal
+                ? isActive
+                  ? "2px solid #58a6ff"
+                  : "2px solid transparent"
+                : undefined,
+              borderLeft: !isHorizontal
+                ? isActive
+                  ? "3px solid #58a6ff"
+                  : "3px solid transparent"
+                : undefined,
+              color: "#e6edf3",
+              fontSize: 13,
+              whiteSpace: "nowrap",
+              minWidth: isHorizontal ? 100 : undefined,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                backgroundColor: statusDotColor(session.status),
+                flexShrink: 0,
+                animation: isRunning(session.status)
+                  ? "pulse 2s infinite"
+                  : undefined,
+              }}
+            />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+              {session.config.mode}
+            </span>
+            {session.iterationCount > 0 && (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "#8b949e",
+                  backgroundColor: "#21262d",
+                  padding: "1px 6px",
+                  borderRadius: 10,
+                }}
+              >
+                #{session.iterationCount}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

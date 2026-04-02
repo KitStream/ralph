@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/ralph-core", "crates/ralph-cli", "src-tauri"]
+resolver = "2"

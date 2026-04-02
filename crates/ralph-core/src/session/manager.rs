@@ -1,0 +1,192 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::{mpsc, watch, RwLock};
+use tokio::task::JoinHandle;
+
+use crate::events::{RecoveryAction, SessionEvent};
+use crate::session::runner::run_session;
+use crate::session::state::{SessionConfig, SessionId, SessionInfo, SessionStatus};
+
+struct SessionHandle {
+    pub info: SessionInfo,
+    pub stop_tx: watch::Sender<bool>,
+    pub abort_tx: watch::Sender<bool>,
+    pub action_tx: Option<mpsc::Sender<RecoveryAction>>,
+    pub task: Option<JoinHandle<()>>,
+}
+
+pub struct SessionManager {
+    sessions: RwLock<HashMap<SessionId, SessionHandle>>,
+}
+
+impl SessionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub async fn create_session(&self, config: SessionConfig) -> SessionId {
+        let id = SessionId::new();
+        let info = SessionInfo {
+            id: id.clone(),
+            config,
+            status: SessionStatus::Created,
+            last_tag: None,
+            iteration_count: 0,
+        };
+
+        let (stop_tx, _) = watch::channel(false);
+        let (abort_tx, _) = watch::channel(false);
+
+        let handle = SessionHandle {
+            info,
+            stop_tx,
+            abort_tx,
+            action_tx: None,
+            task: None,
+        };
+
+        self.sessions.write().await.insert(id.clone(), handle);
+        id
+    }
+
+    pub async fn start_session(
+        &self,
+        id: &SessionId,
+        emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        let mut sessions = self.sessions.write().await;
+        let handle = sessions
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+
+        // Check not already running
+        match &handle.info.status {
+            SessionStatus::Running { .. } | SessionStatus::Stopping { .. } => {
+                anyhow::bail!("Session is already running");
+            }
+            _ => {}
+        }
+
+        // Extract what we need for the duplicate check before iterating
+        let check_project_dir = handle.info.config.project_dir.clone();
+        let check_branch_name = handle.info.config.branch_name.clone();
+
+        // Check no duplicate branch/project
+        for (other_id, other) in sessions.iter() {
+            if other_id != id {
+                if let SessionStatus::Running { .. } | SessionStatus::Stopping { .. } =
+                    &other.info.status
+                {
+                    if other.info.config.project_dir == check_project_dir
+                        && other.info.config.branch_name == check_branch_name
+                    {
+                        anyhow::bail!(
+                            "Another session is already running on branch '{}' in '{:?}'",
+                            check_branch_name,
+                            check_project_dir
+                        );
+                    }
+                }
+            }
+        }
+
+        // Re-get mutable reference after immutable iteration
+        let handle = sessions.get_mut(id).unwrap();
+
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (abort_tx, abort_rx) = watch::channel(false);
+        let (action_tx, action_rx) = mpsc::channel::<RecoveryAction>(1);
+
+        let config = handle.info.config.clone();
+        let session_id = id.clone();
+
+        let task = tokio::spawn(async move {
+            run_session(session_id, config, move |event| emit(event), stop_rx, abort_rx, action_rx).await;
+        });
+
+        handle.stop_tx = stop_tx;
+        handle.abort_tx = abort_tx;
+        handle.action_tx = Some(action_tx);
+        handle.task = Some(task);
+        handle.info.status = SessionStatus::Running {
+            step: crate::session::state::SessionStep::Idle,
+            iteration: 0,
+        };
+
+        Ok(())
+    }
+
+    pub async fn stop_session(&self, id: &SessionId) -> anyhow::Result<()> {
+        let sessions = self.sessions.read().await;
+        let handle = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+
+        handle.stop_tx.send(true).ok();
+        Ok(())
+    }
+
+    pub async fn abort_session(&self, id: &SessionId) -> anyhow::Result<()> {
+        let sessions = self.sessions.read().await;
+        let handle = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+
+        handle.stop_tx.send(true).ok();
+        handle.abort_tx.send(true).ok();
+        Ok(())
+    }
+
+    pub async fn remove_session(&self, id: &SessionId) -> anyhow::Result<()> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(handle) = sessions.get(id) {
+            if let SessionStatus::Running { .. } | SessionStatus::Stopping { .. } =
+                &handle.info.status
+            {
+                anyhow::bail!("Cannot remove a running session. Stop it first.");
+            }
+        }
+        sessions.remove(id);
+        Ok(())
+    }
+
+    pub async fn list_sessions(&self) -> Vec<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        sessions.values().map(|h| h.info.clone()).collect()
+    }
+
+    pub async fn get_session(&self, id: &SessionId) -> Option<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        sessions.get(id).map(|h| h.info.clone())
+    }
+
+    pub async fn send_recovery_action(
+        &self,
+        id: &SessionId,
+        action: RecoveryAction,
+    ) -> anyhow::Result<()> {
+        let sessions = self.sessions.read().await;
+        let handle = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+
+        if let Some(tx) = &handle.action_tx {
+            tx.send(action)
+                .await
+                .map_err(|_| anyhow::anyhow!("Session is not waiting for recovery action"))?;
+        } else {
+            anyhow::bail!("Session has no action channel");
+        }
+        Ok(())
+    }
+
+    pub async fn update_session_status(&self, id: &SessionId, status: SessionStatus) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(handle) = sessions.get_mut(id) {
+            handle.info.status = status;
+        }
+    }
+}
