@@ -104,14 +104,23 @@ pub async fn run_session(
 
         iteration += 1;
 
-        // Step 0: Checkout
+        // Step 0: Clean up any leftover rebase state, then checkout
         emit_status(SessionStatus::Running {
             step: SessionStep::Checkout,
             iteration,
         });
+        if git.has_active_rebase() {
+            emit_log(LogCategory::Warning, "Found leftover rebase state — aborting it.".to_string());
+            git.abort_rebase().await.ok();
+        }
+        // Reset any unmerged index state so checkout can succeed
         if let Err(e) = git.checkout_branch().await {
-            emit_log(LogCategory::Warning, format!("Checkout failed: {}", e));
-            continue;
+            emit_log(LogCategory::Warning, format!("Checkout failed: {} — resetting worktree", e));
+            git.run_in_worktree(&["reset", "--hard"]).await.ok();
+            if let Err(e2) = git.checkout_branch().await {
+                emit_log(LogCategory::Error, format!("Checkout still failed after reset: {}", e2));
+                continue;
+            }
         }
 
         if *stop_rx.borrow() {
@@ -558,9 +567,14 @@ async fn git_housekeeping(
     if let Err(e) = git.fetch_main().await {
         emit_log(LogCategory::Warning, format!("Fetch failed: {}", e));
     }
-    rebase_with_conflict_resolution(git, provider, emit_log, abort_rx)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if let Err(e) = rebase_with_conflict_resolution(git, provider, emit_log, abort_rx).await {
+        // Clean up rebase/merge state so the next iteration doesn't get stuck
+        if git.has_active_rebase() {
+            git.abort_rebase().await.ok();
+        }
+        git.run_in_worktree(&["reset", "--hard"]).await.ok();
+        return Err(anyhow::anyhow!("{}", e));
+    }
 
     // Log diff stat
     if let Ok(diff_stat) = git.diff_stat_against_main().await {

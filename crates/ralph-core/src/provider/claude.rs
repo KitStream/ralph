@@ -46,12 +46,16 @@ impl AiProvider for ClaudeProvider {
         let reader = tokio::io::BufReader::new(stdout);
         let mut lines = reader.lines();
 
+        let mut got_result = false;
         loop {
             tokio::select! {
                 line = lines.next_line() => {
                     match line {
                         Ok(Some(line)) => {
-                            parse_claude_json_line(&line, &output_tx);
+                            if parse_claude_json_line(&line, &output_tx) {
+                                got_result = true;
+                                break;
+                            }
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -70,6 +74,31 @@ impl AiProvider for ClaudeProvider {
             }
         }
 
+        // If we got the result but the process is still running, give it a moment
+        // then kill it — Claude can linger after emitting the result JSON.
+        if got_result {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                child.wait(),
+            )
+            .await
+            {
+                Ok(Ok(status)) if status.success() => return Ok(()),
+                Ok(Ok(status)) => {
+                    let _ = output_tx.send(AiOutput::Error(format!(
+                        "Claude exited with code {}",
+                        status.code().unwrap_or(-1)
+                    )));
+                    anyhow::bail!("Claude exited with non-zero status");
+                }
+                _ => {
+                    // Timed out or error — kill the lingering process
+                    child.kill().await.ok();
+                    return Ok(());
+                }
+            }
+        }
+
         let status = child.wait().await?;
         if !status.success() {
             let _ = output_tx.send(AiOutput::Error(format!(
@@ -83,13 +112,15 @@ impl AiProvider for ClaudeProvider {
     }
 }
 
-fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
+/// Parse a JSON line from Claude's stream output.
+/// Returns `true` if this was a "result" message (i.e. Claude is done).
+fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         // Not JSON, emit as raw text
         if !line.trim().is_empty() {
             let _ = output_tx.send(AiOutput::Text(line.to_string()));
         }
-        return;
+        return false;
     };
 
     match value.get("type").and_then(|t| t.as_str()) {
@@ -107,6 +138,7 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
                     }
                 }
             }
+            false
         }
         Some("result") => {
             if let Some(sid) = value.get("session_id").and_then(|s| s.as_str()) {
@@ -121,7 +153,8 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
                 duration_secs: duration_ms / 1000.0,
                 cost_usd,
             });
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
