@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
 
-use crate::events::{RecoveryAction, SessionEvent};
+use crate::events::{RecoveryAction, SessionEvent, SessionEventPayload};
+use crate::session::persist;
 use crate::session::runner::run_session;
 use crate::session::state::{SessionConfig, SessionId, SessionInfo, SessionStatus};
 
@@ -21,10 +22,36 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Create a new manager, loading any persisted sessions from disk.
     pub fn new() -> Self {
-        Self {
-            sessions: RwLock::new(HashMap::new()),
+        let mut map = HashMap::new();
+
+        if let Ok(persisted) = persist::load_sessions() {
+            for info in persisted {
+                let (stop_tx, _) = watch::channel(false);
+                let (abort_tx, _) = watch::channel(false);
+                map.insert(
+                    info.id.clone(),
+                    SessionHandle {
+                        info,
+                        stop_tx,
+                        abort_tx,
+                        action_tx: None,
+                        task: None,
+                    },
+                );
+            }
         }
+
+        Self {
+            sessions: RwLock::new(map),
+        }
+    }
+
+    async fn persist(&self) {
+        let sessions = self.sessions.read().await;
+        let infos: Vec<SessionInfo> = sessions.values().map(|h| h.info.clone()).collect();
+        persist::save_sessions(&infos).ok();
     }
 
     pub async fn create_session(&self, config: SessionConfig) -> SessionId {
@@ -35,6 +62,7 @@ impl SessionManager {
             status: SessionStatus::Created,
             last_tag: None,
             iteration_count: 0,
+            ai_session_id: None,
         };
 
         let (stop_tx, _) = watch::channel(false);
@@ -49,13 +77,56 @@ impl SessionManager {
         };
 
         self.sessions.write().await.insert(id.clone(), handle);
+        self.persist().await;
         id
     }
 
+    /// Start a session fresh (no AI resume).
     pub async fn start_session(
         &self,
         id: &SessionId,
         emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        self.launch_session(id, emit, None).await
+    }
+
+    /// Resume an aborted session, passing the AI session ID for crash recovery.
+    pub async fn resume_session(
+        &self,
+        id: &SessionId,
+        emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        let ai_session_id = {
+            let sessions = self.sessions.read().await;
+            let handle = sessions
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+            match &handle.info.status {
+                SessionStatus::Aborted { ai_session_id } => ai_session_id.clone(),
+                other => anyhow::bail!("Can only resume aborted sessions, current status: {:?}", other),
+            }
+        };
+
+        // Log the resume attempt
+        emit(SessionEvent {
+            session_id: id.to_string(),
+            payload: SessionEventPayload::Log {
+                category: crate::events::LogCategory::Script,
+                text: format!(
+                    "Resuming session{}...",
+                    ai_session_id.as_ref().map(|s| format!(" (AI session: {})", s)).unwrap_or_default()
+                ),
+            },
+        });
+
+        self.launch_session(id, emit, ai_session_id).await
+    }
+
+    async fn launch_session(
+        &self,
+        id: &SessionId,
+        emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
+        resume_ai_session_id: Option<String>,
     ) -> anyhow::Result<()> {
         let mut sessions = self.sessions.write().await;
         let handle = sessions
@@ -70,11 +141,9 @@ impl SessionManager {
             _ => {}
         }
 
-        // Extract what we need for the duplicate check before iterating
         let check_project_dir = handle.info.config.project_dir.clone();
         let check_branch_name = handle.info.config.branch_name.clone();
 
-        // Check no duplicate branch/project
         for (other_id, other) in sessions.iter() {
             if other_id != id {
                 if let SessionStatus::Running { .. } | SessionStatus::Stopping { .. } =
@@ -93,7 +162,6 @@ impl SessionManager {
             }
         }
 
-        // Re-get mutable reference after immutable iteration
         let handle = sessions.get_mut(id).unwrap();
 
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -104,7 +172,16 @@ impl SessionManager {
         let session_id = id.clone();
 
         let task = tokio::spawn(async move {
-            run_session(session_id, config, move |event| emit(event), stop_rx, abort_rx, action_rx).await;
+            run_session(
+                session_id,
+                config,
+                move |event| emit(event),
+                stop_rx,
+                abort_rx,
+                action_rx,
+                resume_ai_session_id,
+            )
+            .await;
         });
 
         handle.stop_tx = stop_tx;
@@ -116,6 +193,8 @@ impl SessionManager {
             iteration: 0,
         };
 
+        drop(sessions);
+        self.persist().await;
         Ok(())
     }
 
@@ -124,19 +203,29 @@ impl SessionManager {
         let handle = sessions
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
-
         handle.stop_tx.send(true).ok();
         Ok(())
     }
 
     pub async fn abort_session(&self, id: &SessionId) -> anyhow::Result<()> {
-        let sessions = self.sessions.read().await;
-        let handle = sessions
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
-
-        handle.stop_tx.send(true).ok();
-        handle.abort_tx.send(true).ok();
+        {
+            let sessions = self.sessions.read().await;
+            let handle = sessions
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+            handle.stop_tx.send(true).ok();
+            handle.abort_tx.send(true).ok();
+        }
+        // Set status to Aborted with the current AI session ID
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(handle) = sessions.get_mut(id) {
+                handle.info.status = SessionStatus::Aborted {
+                    ai_session_id: handle.info.ai_session_id.clone(),
+                };
+            }
+        }
+        self.persist().await;
         Ok(())
     }
 
@@ -150,6 +239,8 @@ impl SessionManager {
             }
         }
         sessions.remove(id);
+        drop(sessions);
+        self.persist().await;
         Ok(())
     }
 
@@ -183,10 +274,43 @@ impl SessionManager {
         Ok(())
     }
 
-    pub async fn update_session_status(&self, id: &SessionId, status: SessionStatus) {
+    /// Handle events from the runner to update persisted state.
+    pub async fn handle_event(&self, event: &SessionEvent) {
+        let id_str = &event.session_id;
+        let Ok(uuid) = uuid::Uuid::parse_str(id_str) else { return };
+        let id = SessionId(uuid);
+
         let mut sessions = self.sessions.write().await;
-        if let Some(handle) = sessions.get_mut(id) {
-            handle.info.status = status;
+        if let Some(handle) = sessions.get_mut(&id) {
+            match &event.payload {
+                SessionEventPayload::StatusChanged { status } => {
+                    // Don't let runner's Stopped/Failed overwrite an Aborted status
+                    // (abort_session sets Aborted, then the dying runner emits Stopped)
+                    // But do allow Running transitions (from resume/start).
+                    let dominated = matches!(status, SessionStatus::Stopped | SessionStatus::Failed { .. });
+                    if !(dominated && matches!(handle.info.status, SessionStatus::Aborted { .. })) {
+                        handle.info.status = status.clone();
+                    }
+                }
+                SessionEventPayload::AiSessionIdChanged { ai_session_id } => {
+                    handle.info.ai_session_id = ai_session_id.clone();
+                }
+                SessionEventPayload::IterationComplete { iteration, tag } => {
+                    handle.info.iteration_count = *iteration;
+                    if let Some(t) = tag {
+                        handle.info.last_tag = Some(t.clone());
+                    }
+                }
+                SessionEventPayload::Finished { .. } => {
+                    // If it finished normally (not aborted), mark as Stopped
+                    if !matches!(handle.info.status, SessionStatus::Aborted { .. }) {
+                        handle.info.status = SessionStatus::Stopped;
+                    }
+                }
+                _ => {}
+            }
         }
+        drop(sessions);
+        self.persist().await;
     }
 }

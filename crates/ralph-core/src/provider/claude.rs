@@ -18,16 +18,23 @@ impl AiProvider for ClaudeProvider {
         &self,
         working_dir: &Path,
         prompt: &str,
+        resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        let mut child = Command::new("claude")
-            .arg("-p")
+        let mut cmd = Command::new("claude");
+        cmd.arg("-p")
             .arg(prompt)
             .arg("--dangerously-skip-permissions")
             .arg("--output-format")
             .arg("stream-json")
-            .arg("--verbose")
+            .arg("--verbose");
+
+        if let Some(id) = resume_session_id {
+            cmd.arg("--resume").arg(id);
+        }
+
+        let mut child = cmd
             .current_dir(working_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -102,6 +109,9 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
             }
         }
         Some("result") => {
+            if let Some(sid) = value.get("session_id").and_then(|s| s.as_str()) {
+                let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
+            }
             let duration_ms = value
                 .get("duration_ms")
                 .and_then(|d| d.as_f64())

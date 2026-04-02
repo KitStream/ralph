@@ -20,6 +20,8 @@ pub enum AiOutput {
     },
     /// Process exited with error.
     Error(String),
+    /// The AI backend's session ID (for crash recovery resume).
+    SessionId(String),
 }
 
 /// Which AI tool to use.
@@ -68,6 +70,7 @@ pub trait AiProvider: Send + Sync {
         &self,
         working_dir: &Path,
         prompt: &str,
+        resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()>;

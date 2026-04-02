@@ -3,9 +3,10 @@ import type { SessionStatus } from "../lib/types";
 interface ControlBarProps {
   status: SessionStatus;
   onStart: () => void;
+  onResume: () => void;
   onStop: () => void;
   onAbort: () => void;
-  onRemove: () => void;
+  onClose: () => void;
 }
 
 function isRunning(status: SessionStatus): boolean {
@@ -16,15 +17,30 @@ function isStopping(status: SessionStatus): boolean {
   return typeof status === "object" && "Stopping" in status;
 }
 
+function isAborted(status: SessionStatus): boolean {
+  return typeof status === "object" && "Aborted" in status;
+}
+
 export function ControlBar({
   status,
   onStart,
+  onResume,
   onStop,
   onAbort,
-  onRemove,
+  onClose,
 }: ControlBarProps) {
   const running = isRunning(status);
   const stopping = isStopping(status);
+  const aborted = isAborted(status);
+
+  const handleClose = () => {
+    if (aborted) {
+      if (!window.confirm("This session was aborted mid-iteration. Closing it may discard in-progress work. Continue?")) {
+        return;
+      }
+    }
+    onClose();
+  };
 
   return (
     <div
@@ -37,9 +53,19 @@ export function ControlBar({
         borderBottom: "1px solid var(--border-primary)",
       }}
     >
-      {!running && (
+      {!running && !aborted && (
         <button onClick={onStart} style={btnStyle("var(--accent-green)")} title="Start the autonomous coding loop">
           Start
+        </button>
+      )}
+      {aborted && (
+        <button onClick={onResume} style={btnStyle("var(--accent-green)")} title="Resume the aborted session — the AI will pick up where it left off">
+          Resume
+        </button>
+      )}
+      {aborted && (
+        <button onClick={onStart} style={btnStyle("var(--bg-tertiary)")} title="Start fresh, ignoring the previous AI session">
+          Start Fresh
         </button>
       )}
       {running && !stopping && (
@@ -53,13 +79,18 @@ export function ControlBar({
         </button>
       )}
       {!running && (
-        <button onClick={onRemove} style={btnStyle("var(--text-muted)")} title="Remove this session">
-          Remove
+        <button onClick={handleClose} style={btnStyle("var(--text-muted)")} title="Close this session">
+          Close
         </button>
       )}
       {stopping && (
         <span style={{ color: "var(--status-stopping)", fontSize: "12px" }}>
           Stopping after current iteration...
+        </span>
+      )}
+      {aborted && (
+        <span style={{ color: "#f97316", fontSize: "12px" }}>
+          Session was aborted. Resume to continue or Close to discard.
         </span>
       )}
     </div>

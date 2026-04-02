@@ -10,7 +10,7 @@ export interface SessionConfig {
 }
 
 export interface SessionInfo {
-  id: { "0": string };
+  id: string;
   config: SessionConfig;
   status: SessionStatus;
   last_tag: string | null;
@@ -22,6 +22,7 @@ export type SessionStatus =
   | { Running: { step: SessionStep; iteration: number } }
   | { Stopping: { step: SessionStep; iteration: number } }
   | "Stopped"
+  | { Aborted: { ai_session_id: string | null } }
   | { Failed: { error: string } };
 
 export type SessionStep =
@@ -100,4 +101,5 @@ export type SessionEventPayload =
   | { type: "Log"; category: LogCategory; text: string }
   | { type: "IterationComplete"; iteration: number; tag: string | null }
   | { type: "Finished"; reason: string }
+  | { type: "AiSessionIdChanged"; ai_session_id: string | null }
   | { type: "ActionRequired"; error: string; options: RecoveryOption[] };

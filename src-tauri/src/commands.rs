@@ -10,6 +10,18 @@ use ralph_core::provider::AiTool;
 use ralph_core::session::manager::SessionManager;
 use ralph_core::session::state::{SessionConfig, SessionId};
 
+fn make_emit(
+    app: AppHandle,
+    manager: Arc<SessionManager>,
+) -> Arc<dyn Fn(SessionEvent) + Send + Sync> {
+    Arc::new(move |event: SessionEvent| {
+        app.emit("session-event", &event).ok();
+        let mgr = manager.clone();
+        let evt = event.clone();
+        tokio::spawn(async move { mgr.handle_event(&evt).await });
+    })
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModeInfo {
     pub name: String,
@@ -49,7 +61,7 @@ pub async fn discover_modes(project_dir: String) -> Result<Vec<ModeInfo>, String
 
 #[tauri::command]
 pub async fn create_session(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     request: CreateSessionRequest,
 ) -> Result<String, String> {
     let ai_tool: AiTool = request
@@ -74,16 +86,12 @@ pub async fn create_session(
 
 #[tauri::command]
 pub async fn start_session(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     app: AppHandle,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
-
-    let emit: Arc<dyn Fn(SessionEvent) + Send + Sync> = Arc::new(move |event: SessionEvent| {
-        app.emit("session-event", &event).ok();
-    });
-
+    let emit = make_emit(app, manager.inner().clone());
     manager
         .start_session(&id, emit)
         .await
@@ -91,8 +99,22 @@ pub async fn start_session(
 }
 
 #[tauri::command]
+pub async fn resume_session(
+    manager: State<'_, Arc<SessionManager>>,
+    app: AppHandle,
+    session_id: String,
+) -> Result<(), String> {
+    let id = parse_session_id(&session_id)?;
+    let emit = make_emit(app, manager.inner().clone());
+    manager
+        .resume_session(&id, emit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn stop_session(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
@@ -101,7 +123,7 @@ pub async fn stop_session(
 
 #[tauri::command]
 pub async fn abort_session(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
@@ -113,7 +135,7 @@ pub async fn abort_session(
 
 #[tauri::command]
 pub async fn remove_session(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
@@ -125,7 +147,7 @@ pub async fn remove_session(
 
 #[tauri::command]
 pub async fn list_sessions(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
 ) -> Result<Vec<ralph_core::session::state::SessionInfo>, String> {
     Ok(manager.list_sessions().await)
 }
@@ -160,7 +182,7 @@ pub fn get_available_tools() -> Vec<AiToolInfo> {
 
 #[tauri::command]
 pub async fn send_recovery_action(
-    manager: State<'_, SessionManager>,
+    manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     action: String,
 ) -> Result<(), String> {

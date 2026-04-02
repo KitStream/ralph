@@ -25,6 +25,10 @@ pub enum SessionEventPayload {
     Finished {
         reason: String,
     },
+    /// The AI session ID changed (for crash recovery persistence).
+    AiSessionIdChanged {
+        ai_session_id: Option<String>,
+    },
     /// The session needs user input to proceed.
     ActionRequired {
         error: String,

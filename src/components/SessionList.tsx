@@ -13,6 +13,7 @@ function statusDotColor(status: SessionStatus): string {
   if (typeof status === "object") {
     if ("Running" in status) return "var(--status-running)";
     if ("Stopping" in status) return "var(--status-stopping)";
+    if ("Aborted" in status) return "#f97316";
     if ("Failed" in status) return "var(--status-failed)";
   }
   return "var(--status-idle)";

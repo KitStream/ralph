@@ -46,6 +46,8 @@ function getStatusInfo(status: SessionStatus): {
         step: getStepLabel(status.Stopping.step),
         iteration: status.Stopping.iteration,
       };
+    if ("Aborted" in status)
+      return { label: "Aborted", color: "#f97316" };
     if ("Failed" in status)
       return { label: `Failed: ${status.Failed.error}`, color: "var(--status-failed)" };
   }

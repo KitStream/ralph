@@ -149,6 +149,7 @@ async fn main() {
         stop_rx,
         abort_rx,
         action_rx,
+        None, // No resume for CLI fresh start
     )
     .await;
 
@@ -187,6 +188,7 @@ fn print_event(event: &SessionEvent) {
         SessionEventPayload::ActionRequired { error, .. } => {
             eprintln!("{}", format!("Recovery needed: {}", error).yellow().bold());
         }
+        SessionEventPayload::AiSessionIdChanged { .. } => {}
     }
 }
 

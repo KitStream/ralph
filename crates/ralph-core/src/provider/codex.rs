@@ -18,13 +18,26 @@ impl AiProvider for CodexProvider {
         &self,
         working_dir: &Path,
         prompt: &str,
+        resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        let mut child = Command::new("codex")
-            .args(["exec", "--ask-for-approval", "never"])
-            .arg(prompt)
-            .arg("--json")
+        let mut cmd = Command::new("codex");
+
+        if let Some(id) = resume_session_id {
+            // codex exec resume <thread-id> <prompt> --json ...
+            cmd.args(["exec", "resume"])
+                .arg(id)
+                .arg(prompt)
+                .arg("--json")
+                .arg("--dangerously-bypass-approvals-and-sandbox");
+        } else {
+            cmd.args(["exec", "--dangerously-bypass-approvals-and-sandbox"])
+                .arg(prompt)
+                .arg("--json");
+        }
+
+        let mut child = cmd
             .current_dir(working_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -41,16 +54,7 @@ impl AiProvider for CodexProvider {
                 line = lines.next_line() => {
                     match line {
                         Ok(Some(line)) => {
-                            // Codex JSON output — extract text content
-                            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                                if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
-                                    let _ = output_tx.send(AiOutput::Text(text.to_string()));
-                                } else if let Some(msg) = value.get("message").and_then(|m| m.as_str()) {
-                                    let _ = output_tx.send(AiOutput::Text(msg.to_string()));
-                                }
-                            } else if !line.trim().is_empty() {
-                                let _ = output_tx.send(AiOutput::Text(line));
-                            }
+                            parse_codex_json_line(&line, &output_tx);
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -78,5 +82,41 @@ impl AiProvider for CodexProvider {
             anyhow::bail!("Codex exited with non-zero status");
         }
         Ok(())
+    }
+}
+
+fn parse_codex_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        if !line.trim().is_empty() {
+            let _ = output_tx.send(AiOutput::Text(line.to_string()));
+        }
+        return;
+    };
+
+    match value.get("type").and_then(|t| t.as_str()) {
+        Some("thread.started") => {
+            if let Some(tid) = value.get("thread_id").and_then(|t| t.as_str()) {
+                let _ = output_tx.send(AiOutput::SessionId(tid.to_string()));
+            }
+        }
+        Some("item.completed") => {
+            if let Some(text) = value
+                .get("item")
+                .and_then(|i| i.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                if !text.trim().is_empty() {
+                    let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                }
+            }
+        }
+        _ => {
+            // Fallback: try common fields
+            if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
+                if !text.trim().is_empty() {
+                    let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                }
+            }
+        }
     }
 }

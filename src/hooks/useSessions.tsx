@@ -148,6 +148,7 @@ interface SessionsContextType {
   dispatch: React.Dispatch<Action>;
   createSession: (req: commands.CreateSessionRequest) => Promise<string>;
   startSession: (id: string) => Promise<void>;
+  resumeSession: (id: string) => Promise<void>;
   stopSession: (id: string) => Promise<void>;
   abortSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
@@ -172,10 +173,28 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  // Load settings and existing sessions on mount
+  // Load settings and persisted sessions on mount
   useEffect(() => {
     commands.getSettings().then((settings) => {
       dispatch({ type: "SET_SETTINGS", settings });
+    });
+    commands.listSessions().then((infos) => {
+      const sessions = new Map<string, SessionState>();
+      for (const info of infos) {
+        const id = typeof info.id === "string" ? info.id : String(info.id);
+        sessions.set(id, {
+          id,
+          config: info.config,
+          status: info.status,
+          lastTag: info.last_tag,
+          iterationCount: info.iteration_count,
+          logs: [],
+          recoveryRequest: null,
+        });
+      }
+      if (sessions.size > 0) {
+        dispatch({ type: "SET_SESSIONS", sessions });
+      }
     });
   }, []);
 
@@ -237,7 +256,19 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   );
 
   const startSessionFn = useCallback(async (id: string) => {
-    await commands.startSession(id);
+    try {
+      await commands.startSession(id);
+    } catch (e) {
+      console.error("startSession failed:", e);
+    }
+  }, []);
+
+  const resumeSessionFn = useCallback(async (id: string) => {
+    try {
+      await commands.resumeSession(id);
+    } catch (e) {
+      console.error("resumeSession failed:", e);
+    }
   }, []);
 
   const stopSessionFn = useCallback(async (id: string) => {
@@ -270,6 +301,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         dispatch,
         createSession: createSessionFn,
         startSession: startSessionFn,
+        resumeSession: resumeSessionFn,
         stopSession: stopSessionFn,
         abortSession: abortSessionFn,
         removeSession: removeSessionFn,

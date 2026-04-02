@@ -73,6 +73,9 @@ pub enum SessionStatus {
         iteration: u32,
     },
     Stopped,
+    Aborted {
+        ai_session_id: Option<String>,
+    },
     Failed {
         error: String,
     },
@@ -85,4 +88,6 @@ pub struct SessionInfo {
     pub status: SessionStatus,
     pub last_tag: Option<String>,
     pub iteration_count: u32,
+    #[serde(default)]
+    pub ai_session_id: Option<String>,
 }

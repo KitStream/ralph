@@ -8,7 +8,7 @@ interface SessionPanelProps {
 }
 
 export function SessionPanel({ sessionId }: SessionPanelProps) {
-  const { session, start, stop, abort, remove } = useSession(sessionId);
+  const { session, start, resume, stop, abort, remove } = useSession(sessionId);
 
   if (!session) {
     return (
@@ -32,9 +32,10 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
       <ControlBar
         status={session.status}
         onStart={start}
+        onResume={resume}
         onStop={stop}
         onAbort={abort}
-        onRemove={remove}
+        onClose={remove}
       />
       <LogView logs={session.logs} />
       <StatusBar

@@ -19,17 +19,25 @@ impl AiProvider for CursorProvider {
         &self,
         working_dir: &Path,
         prompt: &str,
+        resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         let start = Instant::now();
 
-        let mut child = Command::new("cursor-agent")
-            .arg("-p")
+        let mut cmd = Command::new("cursor-agent");
+        cmd.arg("-p")
             .arg("--yolo")
             .arg("--output-format")
-            .arg("stream-json")
-            .arg(prompt)
+            .arg("stream-json");
+
+        if let Some(id) = resume_session_id {
+            cmd.arg("--resume").arg(id);
+        }
+
+        cmd.arg(prompt);
+
+        let mut child = cmd
             .current_dir(working_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -103,6 +111,11 @@ fn emit_non_empty(output_tx: &mpsc::UnboundedSender<AiOutput>, text: &str) {
 
 fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+        // Extract session_id from result events
+        if let Some(sid) = value.get("session_id").and_then(|s| s.as_str()) {
+            let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
+        }
+
         // stream-json format: look for text content in various shapes
         if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
             emit_non_empty(output_tx, text);

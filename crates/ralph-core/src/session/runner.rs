@@ -34,6 +34,7 @@ pub async fn run_session(
     stop_rx: watch::Receiver<bool>,
     abort_rx: watch::Receiver<bool>,
     mut action_rx: mpsc::Receiver<RecoveryAction>,
+    resume_ai_session_id: Option<String>,
 ) {
     let emit_event = |payload: SessionEventPayload| {
         emit(SessionEvent {
@@ -90,6 +91,10 @@ pub async fn run_session(
     );
 
     let mut iteration = 0u32;
+    // AI session ID for crash recovery resume. Set from Aborted state or captured during run.
+    let mut current_ai_session_id: Option<String> = resume_ai_session_id;
+
+    let mut stash_pending = false; // true if we stashed changes that need to be popped after rebase
 
     loop {
         if *stop_rx.borrow() {
@@ -170,7 +175,8 @@ pub async fn run_session(
                                 return;
                             }
                         }
-                        emit_log(LogCategory::Script, "Retrying...".to_string());
+                        stash_pending = true;
+                        emit_log(LogCategory::Script, "Retrying (will unstash after rebase)...".to_string());
                         continue;
                     }
                     Some(RecoveryAction::Commit) => {
@@ -188,7 +194,7 @@ pub async fn run_session(
 
                         let commit_task = tokio::spawn(async move {
                             provider_clone
-                                .run(&working_dir, commit_prompt, output_tx, abort_clone)
+                                .run(&working_dir, commit_prompt, None, output_tx, abort_clone)
                                 .await
                         });
 
@@ -200,6 +206,7 @@ pub async fn run_session(
                                     emit_log(LogCategory::Script, format!("--- Commit agent finished in {:.1}s{} ---", duration_secs, cost_str));
                                 }
                                 AiOutput::Error(e) => emit_log(LogCategory::Error, e),
+                                AiOutput::SessionId(_) => {} // not used for recovery
                             }
                         }
 
@@ -252,6 +259,18 @@ pub async fn run_session(
             }
         }
 
+        // Pop stash if we stashed before the rebase
+        if stash_pending {
+            stash_pending = false;
+            emit_log(LogCategory::Script, "Unstashing changes...".to_string());
+            match git.run_in_worktree(&["stash", "pop"]).await {
+                Ok(output) => emit_log(LogCategory::Git, output),
+                Err(e) => {
+                    emit_log(LogCategory::Warning, format!("Stash pop failed: {}. Changes remain in stash.", e));
+                }
+            }
+        }
+
         if *stop_rx.borrow() {
             emit_log(LogCategory::Script, "Stop requested. Exiting.".to_string());
             break;
@@ -275,62 +294,79 @@ pub async fn run_session(
             }
         };
 
-        let (output_tx, mut output_rx) = mpsc::unbounded_channel();
-        let abort_clone = abort_rx.clone();
-        let working_dir = git.worktree_dir.clone();
-        let prompt_clone = prompt.clone();
-        let provider_clone = provider.clone();
+        // AI run with crash-recovery retry
+        let max_ai_attempts = 3u32;
+        let mut ai_ok = false;
+        for ai_attempt in 1..=max_ai_attempts {
+            let resume_id = current_ai_session_id.clone();
+            if ai_attempt > 1 {
+                emit_log(
+                    LogCategory::Script,
+                    format!(
+                        "Resuming {} session (attempt {}/{})...",
+                        provider.name(), ai_attempt, max_ai_attempts
+                    ),
+                );
+            }
 
-        let ai_task = tokio::spawn(async move {
-            provider_clone
-                .run(&working_dir, &prompt_clone, output_tx, abort_clone)
-                .await
-        });
+            let (output_tx, mut output_rx) = mpsc::unbounded_channel();
+            let abort_clone = abort_rx.clone();
+            let working_dir = git.worktree_dir.clone();
+            let prompt_clone = prompt.clone();
+            let provider_clone = provider.clone();
 
-        // Forward AI output as log events
-        while let Some(output) = output_rx.recv().await {
-            match output {
-                AiOutput::Text(text) => {
-                    emit_log(LogCategory::Ai, text);
+            let ai_task = tokio::spawn(async move {
+                provider_clone
+                    .run(&working_dir, &prompt_clone, resume_id.as_deref(), output_tx, abort_clone)
+                    .await
+            });
+
+            // Forward AI output as log events, capture session ID
+            while let Some(output) = output_rx.recv().await {
+                match output {
+                    AiOutput::Text(text) => {
+                        emit_log(LogCategory::Ai, text);
+                    }
+                    AiOutput::Finished { duration_secs, cost_usd } => {
+                        let cost_str = cost_usd
+                            .map(|c| format!(" | cost: ${:.4}", c))
+                            .unwrap_or_default();
+                        emit_log(
+                            LogCategory::Script,
+                            format!("--- {} finished in {:.1}s{} ---", config.ai_tool, duration_secs, cost_str),
+                        );
+                    }
+                    AiOutput::Error(e) => {
+                        emit_log(LogCategory::Error, e);
+                    }
+                    AiOutput::SessionId(sid) => {
+                        current_ai_session_id = Some(sid.clone());
+                        emit_event(SessionEventPayload::AiSessionIdChanged {
+                            ai_session_id: Some(sid),
+                        });
+                    }
                 }
-                AiOutput::Finished {
-                    duration_secs,
-                    cost_usd,
-                } => {
-                    let cost_str = cost_usd
-                        .map(|c| format!(" | cost: ${:.4}", c))
-                        .unwrap_or_default();
-                    emit_log(
-                        LogCategory::Script,
-                        format!(
-                            "--- {} finished in {:.1}s{} ---",
-                            config.ai_tool, duration_secs, cost_str
-                        ),
-                    );
+            }
+
+            match ai_task.await {
+                Ok(Ok(())) => {
+                    ai_ok = true;
+                    break;
                 }
-                AiOutput::Error(e) => {
-                    emit_log(LogCategory::Error, e);
+                Ok(Err(e)) => {
+                    emit_log(LogCategory::Warning, format!("{} failed: {}", config.ai_tool, e));
+                    // If we have a session ID, retry with resume
+                    if current_ai_session_id.is_some() && ai_attempt < max_ai_attempts {
+                        continue;
+                    }
+                    break;
+                }
+                Err(e) => {
+                    emit_log(LogCategory::Warning, format!("{} task panicked: {}", config.ai_tool, e));
+                    break;
                 }
             }
         }
-
-        let ai_ok = match ai_task.await {
-            Ok(Ok(())) => true,
-            Ok(Err(e)) => {
-                emit_log(
-                    LogCategory::Warning,
-                    format!("{} failed: {}", config.ai_tool, e),
-                );
-                false
-            }
-            Err(e) => {
-                emit_log(
-                    LogCategory::Warning,
-                    format!("{} task panicked: {}", config.ai_tool, e),
-                );
-                false
-            }
-        };
 
         let head_changed = git.head_changed(&head_before).await.unwrap_or(false);
         if !ai_ok || !head_changed {
@@ -338,6 +374,9 @@ pub async fn run_session(
                 LogCategory::Warning,
                 format!("{} made no commits. Skipping housekeeping.", config.ai_tool),
             );
+            // Clear session ID — next iteration starts fresh
+            current_ai_session_id = None;
+            emit_event(SessionEventPayload::AiSessionIdChanged { ai_session_id: None });
             continue;
         }
 
@@ -362,6 +401,9 @@ pub async fn run_session(
         .await
         {
             Ok(tag) => {
+                // Clear AI session ID — next iteration starts fresh
+                current_ai_session_id = None;
+                emit_event(SessionEventPayload::AiSessionIdChanged { ai_session_id: None });
                 emit_event(SessionEventPayload::IterationComplete {
                     iteration,
                     tag: tag.clone(),
@@ -445,7 +487,7 @@ async fn rebase_with_conflict_resolution(
 
                 let resolve_task = tokio::spawn(async move {
                     provider_clone
-                        .run(&working_dir, &conflict_prompt, output_tx, abort_clone)
+                        .run(&working_dir, &conflict_prompt, None, output_tx, abort_clone)
                         .await
                 });
 

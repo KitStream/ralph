@@ -31,6 +31,10 @@ export async function startSession(sessionId: string): Promise<void> {
   return invoke("start_session", { sessionId });
 }
 
+export async function resumeSession(sessionId: string): Promise<void> {
+  return invoke("resume_session", { sessionId });
+}
+
 export async function stopSession(sessionId: string): Promise<void> {
   return invoke("stop_session", { sessionId });
 }
