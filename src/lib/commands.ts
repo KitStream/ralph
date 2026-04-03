@@ -4,6 +4,8 @@ import type {
   AiToolInfo,
   SessionInfo,
   AppSettings,
+  IterationSummary,
+  LogRecord,
 } from "./types";
 
 export interface CreateSessionRequest {
@@ -65,6 +67,14 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function updateSettings(settings: AppSettings): Promise<void> {
   return invoke("update_settings", { settings });
+}
+
+export async function listLogIterations(sessionId: string): Promise<IterationSummary[]> {
+  return invoke("list_log_iterations", { sessionId });
+}
+
+export async function readLogIteration(sessionId: string, iteration: number): Promise<LogRecord[]> {
+  return invoke("read_log_iteration", { sessionId, iteration });
 }
 
 export async function sendRecoveryAction(

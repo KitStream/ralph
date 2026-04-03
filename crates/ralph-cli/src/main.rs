@@ -153,6 +153,8 @@ async fn main() {
         abort_rx,
         action_rx,
         None, // No resume for CLI fresh start
+        None, // No resume step
+        None, // No resume iteration
     )
     .await;
 

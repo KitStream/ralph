@@ -1,13 +1,14 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::events::{RecoveryAction, SessionEvent, SessionEventPayload};
+use crate::session::log_store::{IterationSummary, LogRecord, SessionLogStore};
 use crate::session::persist;
 use crate::session::runner::run_session;
-use crate::session::state::{SessionConfig, SessionId, SessionInfo, SessionStatus};
+use crate::session::state::{SessionConfig, SessionId, SessionInfo, SessionStatus, SessionStep};
 
 struct SessionHandle {
     pub info: SessionInfo,
@@ -19,6 +20,8 @@ struct SessionHandle {
 
 pub struct SessionManager {
     sessions: RwLock<HashMap<SessionId, SessionHandle>>,
+    log_store: SessionLogStore,
+    iteration_tracker: Mutex<HashMap<String, u32>>,
 }
 
 impl SessionManager {
@@ -45,6 +48,8 @@ impl SessionManager {
 
         Self {
             sessions: RwLock::new(map),
+            log_store: SessionLogStore::new(persist::dirs_or_default()),
+            iteration_tracker: Mutex::new(HashMap::new()),
         }
     }
 
@@ -87,7 +92,7 @@ impl SessionManager {
         id: &SessionId,
         emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
     ) -> anyhow::Result<()> {
-        self.launch_session(id, emit, None).await
+        self.launch_session(id, emit, None, None, None).await
     }
 
     /// Resume an aborted session, passing the AI session ID for crash recovery.
@@ -96,30 +101,34 @@ impl SessionManager {
         id: &SessionId,
         emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
     ) -> anyhow::Result<()> {
-        let ai_session_id = {
+        let (ai_session_id, resume_step, resume_iteration) = {
             let sessions = self.sessions.read().await;
             let handle = sessions
                 .get(id)
                 .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
             match &handle.info.status {
-                SessionStatus::Aborted { ai_session_id } => ai_session_id.clone(),
+                SessionStatus::Aborted { ai_session_id, step, iteration } => {
+                    (ai_session_id.clone(), step.clone(), *iteration)
+                }
                 other => anyhow::bail!("Can only resume aborted sessions, current status: {:?}", other),
             }
         };
 
         // Log the resume attempt
+        let step_info = resume_step.as_ref().map(|s| format!(" at step {}", s)).unwrap_or_default();
         emit(SessionEvent {
             session_id: id.to_string(),
             payload: SessionEventPayload::Log {
                 category: crate::events::LogCategory::Script,
                 text: format!(
-                    "Resuming session{}...",
-                    ai_session_id.as_ref().map(|s| format!(" (AI session: {})", s)).unwrap_or_default()
+                    "Resuming session{}{}...",
+                    ai_session_id.as_ref().map(|s| format!(" (AI session: {})", s)).unwrap_or_default(),
+                    step_info,
                 ),
             },
         });
 
-        self.launch_session(id, emit, ai_session_id).await
+        self.launch_session(id, emit, ai_session_id, resume_step, resume_iteration).await
     }
 
     async fn launch_session(
@@ -127,6 +136,8 @@ impl SessionManager {
         id: &SessionId,
         emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
         resume_ai_session_id: Option<String>,
+        resume_step: Option<SessionStep>,
+        resume_iteration: Option<u32>,
     ) -> anyhow::Result<()> {
         let mut sessions = self.sessions.write().await;
         let handle = sessions
@@ -180,6 +191,8 @@ impl SessionManager {
                 abort_rx,
                 action_rx,
                 resume_ai_session_id,
+                resume_step,
+                resume_iteration,
             )
             .await;
         });
@@ -225,12 +238,21 @@ impl SessionManager {
             handle.stop_tx.send(true).ok();
             handle.abort_tx.send(true).ok();
         }
-        // Set status to Aborted with the current AI session ID
+        // Set status to Aborted, preserving the step and iteration
         {
             let mut sessions = self.sessions.write().await;
             if let Some(handle) = sessions.get_mut(id) {
+                let (step, iteration) = match &handle.info.status {
+                    SessionStatus::Running { step, iteration }
+                    | SessionStatus::Stopping { step, iteration } => {
+                        (Some(step.clone()), Some(*iteration))
+                    }
+                    _ => (None, None),
+                };
                 handle.info.status = SessionStatus::Aborted {
                     ai_session_id: handle.info.ai_session_id.clone(),
+                    step,
+                    iteration,
                 };
             }
         }
@@ -247,8 +269,10 @@ impl SessionManager {
                 anyhow::bail!("Cannot remove a running session. Stop it first.");
             }
         }
+        let id_str = id.to_string();
         sessions.remove(id);
         drop(sessions);
+        self.log_store.delete_session_logs(&id_str);
         self.persist().await;
         Ok(())
     }
@@ -320,6 +344,42 @@ impl SessionManager {
             }
         }
         drop(sessions);
+
+        // Append loggable events to disk
+        match &event.payload {
+            SessionEventPayload::Log { .. }
+            | SessionEventPayload::AiContent { .. }
+            | SessionEventPayload::Housekeeping { .. }
+            | SessionEventPayload::RateLimited { .. }
+            | SessionEventPayload::ActionRequired { .. } => {
+                let iteration = {
+                    let tracker = self.iteration_tracker.lock().unwrap();
+                    tracker.get(id_str).copied().unwrap_or(1)
+                };
+                self.log_store.append(id_str, iteration, &event.payload).ok();
+            }
+            SessionEventPayload::IterationComplete { iteration, .. } => {
+                // Write the IterationComplete event to the current iteration file
+                let current = {
+                    let tracker = self.iteration_tracker.lock().unwrap();
+                    tracker.get(id_str).copied().unwrap_or(1)
+                };
+                self.log_store.append(id_str, current, &event.payload).ok();
+                // Advance the tracker to the next iteration
+                let mut tracker = self.iteration_tracker.lock().unwrap();
+                tracker.insert(id_str.to_string(), *iteration + 1);
+            }
+            _ => {}
+        }
+
         self.persist().await;
+    }
+
+    pub fn list_iterations(&self, session_id: &str) -> Vec<IterationSummary> {
+        self.log_store.list_iterations(session_id)
+    }
+
+    pub fn read_iteration(&self, session_id: &str, iteration: u32) -> Vec<LogRecord> {
+        self.log_store.read_iteration(session_id, iteration)
     }
 }

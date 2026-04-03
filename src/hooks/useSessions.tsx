@@ -13,10 +13,12 @@ import type {
   SessionEvent,
   SessionEventPayload,
   LogEntry,
+  ToolResultData,
   SessionStatus,
   AppSettings,
   AiContentBlock,
   HousekeepingBlock,
+  IterationSummary,
 } from "../lib/types";
 
 interface AppState {
@@ -33,9 +35,28 @@ type Action =
   | { type: "SESSION_EVENT"; event: SessionEvent }
   | { type: "SET_SETTINGS"; settings: AppSettings }
   | { type: "MARK_STOPPING"; id: string }
-  | { type: "CANCEL_STOPPING"; id: string };
+  | { type: "CANCEL_STOPPING"; id: string }
+  | { type: "LOAD_ITERATIONS"; sessionId: string; iterations: IterationSummary[] }
+  | { type: "SET_ITERATION_LOGS"; sessionId: string; iteration: number; entries: LogEntry[] }
+  | { type: "TOGGLE_FOLD_ITERATION"; sessionId: string; iteration: number };
 
 let logIdCounter = 0;
+
+function makeEmptySessionState(id: string, config: SessionState["config"], status: SessionStatus, iterationCount: number, lastTag: string | null): SessionState {
+  return {
+    id,
+    config,
+    status,
+    lastTag,
+    iterationCount,
+    iterations: [],
+    iterationLogs: new Map(),
+    foldedIterations: new Set(),
+    currentIteration: iterationCount > 0 ? iterationCount + 1 : 1,
+    recoveryRequest: null,
+    rateLimitMessage: null,
+  };
+}
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -48,7 +69,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         sessions,
-        activeSessionId: state.activeSessionId ?? action.session.id,
+        activeSessionId: action.session.id,
       };
     }
 
@@ -82,7 +103,6 @@ function reducer(state: AppState, action: Action): AppState {
     case "MARK_STOPPING": {
       const session = state.sessions.get(action.id);
       if (!session) return state;
-      // Extract current step/iteration from Running status, or use defaults
       let step: import("../lib/types").SessionStep = "Idle";
       let iteration = session.iterationCount || 0;
       if (typeof session.status === "object" && "Running" in session.status) {
@@ -101,7 +121,6 @@ function reducer(state: AppState, action: Action): AppState {
     case "CANCEL_STOPPING": {
       const session = state.sessions.get(action.id);
       if (!session) return state;
-      // Revert Stopping back to Running
       let step: import("../lib/types").SessionStep = "Idle";
       let iteration = session.iterationCount || 0;
       if (typeof session.status === "object" && "Stopping" in session.status) {
@@ -117,9 +136,103 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, sessions };
     }
 
+    case "LOAD_ITERATIONS": {
+      const session = state.sessions.get(action.sessionId);
+      if (!session) return state;
+      const nextIteration = session.iterationCount > 0 ? session.iterationCount + 1 : 1;
+      const folded = new Set<number>();
+      for (const s of action.iterations) {
+        if (s.iteration <= nextIteration - 4) {
+          folded.add(s.iteration);
+        }
+      }
+      const updated: SessionState = {
+        ...session,
+        iterations: action.iterations,
+        foldedIterations: folded,
+        currentIteration: nextIteration,
+      };
+      const sessions = new Map(state.sessions);
+      sessions.set(action.sessionId, updated);
+      return { ...state, sessions };
+    }
+
+    case "SET_ITERATION_LOGS": {
+      const session = state.sessions.get(action.sessionId);
+      if (!session) return state;
+      const iterationLogs = new Map(session.iterationLogs);
+      iterationLogs.set(action.iteration, action.entries);
+      const updated: SessionState = { ...session, iterationLogs };
+      const sessions = new Map(state.sessions);
+      sessions.set(action.sessionId, updated);
+      return { ...state, sessions };
+    }
+
+    case "TOGGLE_FOLD_ITERATION": {
+      const session = state.sessions.get(action.sessionId);
+      if (!session) return state;
+      const foldedIterations = new Set(session.foldedIterations);
+      const iterationLogs = new Map(session.iterationLogs);
+      if (foldedIterations.has(action.iteration)) {
+        foldedIterations.delete(action.iteration);
+        // Entries will be loaded asynchronously by the component
+      } else {
+        foldedIterations.add(action.iteration);
+        // Free memory
+        iterationLogs.delete(action.iteration);
+      }
+      const updated: SessionState = { ...session, foldedIterations, iterationLogs };
+      const sessions = new Map(state.sessions);
+      sessions.set(action.sessionId, updated);
+      return { ...state, sessions };
+    }
+
     default:
       return state;
   }
+}
+
+function appendLogEntry(session: SessionState, entry: LogEntry): SessionState {
+  const iter = session.currentIteration;
+  const iterationLogs = new Map(session.iterationLogs);
+  const existing = iterationLogs.get(iter) ?? [];
+  iterationLogs.set(iter, [...existing, entry]);
+
+  // Update iteration summary
+  const iterations = [...session.iterations];
+  const idx = iterations.findIndex((s) => s.iteration === iter);
+  if (idx >= 0) {
+    iterations[idx] = { ...iterations[idx], entry_count: iterations[idx].entry_count + 1 };
+  } else {
+    iterations.push({ iteration: iter, entry_count: 1 });
+  }
+
+  return { ...session, iterationLogs, iterations };
+}
+
+function attachToolResult(session: SessionState, toolUseId: string, result: ToolResultData): SessionState {
+  // Search backwards through iterations to find the matching ToolUse entry
+  const iterationLogs = new Map(session.iterationLogs);
+  for (const [iter, entries] of iterationLogs) {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (entry.aiBlock?.kind === "ToolUse" && entry.aiBlock.tool_id === toolUseId) {
+        const updated = [...entries];
+        updated[i] = { ...entry, toolResult: result };
+        iterationLogs.set(iter, updated);
+        return { ...session, iterationLogs };
+      }
+    }
+  }
+  // Fallback: if no matching ToolUse found, append as a standalone entry
+  const fallbackEntry: LogEntry = {
+    id: ++logIdCounter,
+    category: "Ai",
+    text: result.content.slice(0, 200),
+    timestamp: Date.now(),
+    aiBlock: { kind: "ToolResult", tool_use_id: toolUseId, content: result.content, is_error: result.is_error },
+  };
+  return appendLogEntry(session, fallbackEntry);
 }
 
 function applyEvent(
@@ -137,10 +250,17 @@ function applyEvent(
         text: payload.text,
         timestamp: Date.now(),
       };
-      return { ...session, logs: [...session.logs, entry] };
+      return appendLogEntry(session, entry);
     }
 
     case "AiContent": {
+      // ToolResult: attach to matching ToolUse entry instead of appending
+      if (payload.block.kind === "ToolResult") {
+        return attachToolResult(session, payload.block.tool_use_id, {
+          content: payload.block.content,
+          is_error: payload.block.is_error,
+        });
+      }
       const entry: LogEntry = {
         id: ++logIdCounter,
         category: "Ai",
@@ -148,7 +268,7 @@ function applyEvent(
         timestamp: Date.now(),
         aiBlock: payload.block,
       };
-      return { ...session, logs: [...session.logs, entry] };
+      return appendLogEntry(session, entry);
     }
 
     case "Housekeeping": {
@@ -159,18 +279,33 @@ function applyEvent(
         timestamp: Date.now(),
         housekeepingBlock: payload.block,
       };
-      return { ...session, logs: [...session.logs, entry] };
+      return appendLogEntry(session, entry);
     }
 
     case "RateLimited":
       return { ...session, rateLimitMessage: payload.message };
 
-    case "IterationComplete":
+    case "IterationComplete": {
+      const completedIteration = payload.iteration;
+      const nextIteration = completedIteration + 1;
+      // Auto-fold iterations more than 3 behind the next one
+      const foldedIterations = new Set(session.foldedIterations);
+      const iterationLogs = new Map(session.iterationLogs);
+      for (const s of session.iterations) {
+        if (s.iteration <= nextIteration - 4 && !foldedIterations.has(s.iteration)) {
+          foldedIterations.add(s.iteration);
+          iterationLogs.delete(s.iteration);
+        }
+      }
       return {
         ...session,
-        iterationCount: payload.iteration,
+        iterationCount: completedIteration,
+        currentIteration: nextIteration,
         lastTag: payload.tag ?? session.lastTag,
+        foldedIterations,
+        iterationLogs,
       };
+    }
 
     case "Finished":
       return { ...session, status: "Stopped" as SessionStatus, recoveryRequest: null };
@@ -235,9 +370,55 @@ interface SessionsContextType {
   removeSession: (id: string) => Promise<void>;
   setActiveSession: (id: string | null) => void;
   updateSettings: (settings: AppSettings) => Promise<void>;
+  loadIterationLogs: (sessionId: string, iteration: number) => Promise<void>;
+  toggleFoldIteration: (sessionId: string, iteration: number) => void;
 }
 
 const SessionsContext = createContext<SessionsContextType | null>(null);
+
+function logRecordsToEntries(records: import("../lib/types").LogRecord[]): LogEntry[] {
+  const entries: LogEntry[] = [];
+  // Map tool_id -> index in entries for attaching results
+  const toolUseIndex = new Map<string, number>();
+
+  for (const record of records) {
+    const p = record.payload;
+    let entry: LogEntry | null = null;
+    switch (p.type) {
+      case "Log":
+        entry = { id: ++logIdCounter, category: p.category, text: p.text, timestamp: record.timestamp };
+        break;
+      case "AiContent":
+        if (p.block.kind === "ToolResult") {
+          // Attach to matching ToolUse
+          const idx = toolUseIndex.get(p.block.tool_use_id);
+          if (idx !== undefined) {
+            entries[idx] = { ...entries[idx], toolResult: { content: p.block.content, is_error: p.block.is_error } };
+          }
+          continue; // Don't add as separate entry
+        }
+        entry = { id: ++logIdCounter, category: "Ai", text: summarizeAiBlock(p.block), timestamp: record.timestamp, aiBlock: p.block };
+        if (p.block.kind === "ToolUse") {
+          toolUseIndex.set(p.block.tool_id, entries.length); // will be pushed next
+        }
+        break;
+      case "Housekeeping":
+        entry = { id: ++logIdCounter, category: "Git", text: summarizeHousekeepingBlock(p.block), timestamp: record.timestamp, housekeepingBlock: p.block };
+        break;
+      case "IterationComplete":
+        entry = { id: ++logIdCounter, category: "Script", text: `=== Iteration ${p.iteration} complete${p.tag ? `: tagged ${p.tag}` : ""} ===`, timestamp: record.timestamp };
+        break;
+      case "RateLimited":
+        entry = { id: ++logIdCounter, category: "Warning", text: p.message, timestamp: record.timestamp };
+        break;
+      case "ActionRequired":
+        entry = { id: ++logIdCounter, category: "Error", text: p.error, timestamp: record.timestamp };
+        break;
+    }
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
 
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, {
@@ -251,6 +432,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       default_tagging_enabled: true,
       recent_project_dirs: [],
       recent_preambles: [],
+      tool_output_preview_lines: 2,
     },
   });
 
@@ -259,23 +441,38 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     commands.getSettings().then((settings) => {
       dispatch({ type: "SET_SETTINGS", settings });
     });
-    commands.listSessions().then((infos) => {
+    commands.listSessions().then(async (infos) => {
       const sessions = new Map<string, SessionState>();
       for (const info of infos) {
         const id = typeof info.id === "string" ? info.id : String(info.id);
-        sessions.set(id, {
+        sessions.set(id, makeEmptySessionState(
           id,
-          config: info.config,
-          status: info.status,
-          lastTag: info.last_tag,
-          iterationCount: info.iteration_count,
-          logs: [],
-          recoveryRequest: null,
-          rateLimitMessage: null,
-        });
+          info.config,
+          info.status,
+          info.iteration_count,
+          info.last_tag,
+        ));
       }
       if (sessions.size > 0) {
         dispatch({ type: "SET_SESSIONS", sessions });
+      }
+
+      // Load iteration summaries for each session
+      for (const [id] of sessions) {
+        commands.listLogIterations(id).then(async (iterations) => {
+          dispatch({ type: "LOAD_ITERATIONS", sessionId: id, iterations });
+
+          // Load the last 3 iterations' logs
+          const info = infos.find((i) => (typeof i.id === "string" ? i.id : String(i.id)) === id);
+          const currentIter = info?.iteration_count ?? 0;
+          for (const s of iterations) {
+            if (s.iteration > currentIter - 3) {
+              const records = await commands.readLogIteration(id, s.iteration);
+              const entries = logRecordsToEntries(records);
+              dispatch({ type: "SET_ITERATION_LOGS", sessionId: id, iteration: s.iteration, entries });
+            }
+          }
+        });
       }
     });
   }, []);
@@ -312,9 +509,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const createSessionFn = useCallback(
     async (req: commands.CreateSessionRequest) => {
       const id = await commands.createSession(req);
-      const session: SessionState = {
+      const session = makeEmptySessionState(
         id,
-        config: {
+        {
           project_dir: req.project_dir,
           mode: req.mode,
           prompt_file: req.prompt_file,
@@ -324,13 +521,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           tagging_enabled: req.tagging_enabled,
           ai_tool: req.ai_tool,
         },
-        status: "Created",
-        lastTag: null,
-        iterationCount: 0,
-        logs: [],
-        recoveryRequest: null,
-        rateLimitMessage: null,
-      };
+        "Created",
+        0,
+        null,
+      );
       dispatch({ type: "ADD_SESSION", session });
       persistSessionDefaults(req);
       return id;
@@ -382,6 +576,16 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_SETTINGS", settings });
   }, []);
 
+  const loadIterationLogsFn = useCallback(async (sessionId: string, iteration: number) => {
+    const records = await commands.readLogIteration(sessionId, iteration);
+    const entries = logRecordsToEntries(records);
+    dispatch({ type: "SET_ITERATION_LOGS", sessionId, iteration, entries });
+  }, []);
+
+  const toggleFoldIterationFn = useCallback((sessionId: string, iteration: number) => {
+    dispatch({ type: "TOGGLE_FOLD_ITERATION", sessionId, iteration });
+  }, []);
+
   return (
     <SessionsContext.Provider
       value={{
@@ -396,6 +600,8 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         removeSession: removeSessionFn,
         setActiveSession: setActiveSessionFn,
         updateSettings: updateSettingsFn,
+        loadIterationLogs: loadIterationLogsFn,
+        toggleFoldIteration: toggleFoldIterationFn,
       }}
     >
       {children}

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import Markdown from "react-markdown";
 import type {
@@ -7,6 +7,8 @@ import type {
   AiContentBlock,
   HousekeepingBlock,
   ToolInvocation,
+  ToolResultData,
+  IterationSummary,
 } from "../lib/types";
 
 const categoryColorVars: Record<LogCategory, string> = {
@@ -17,25 +19,79 @@ const categoryColorVars: Record<LogCategory, string> = {
   Error: "var(--log-error)",
 };
 
+type DisplayItem =
+  | { type: "iteration-header"; iteration: number; entryCount: number; folded: boolean }
+  | { type: "log-entry"; entry: LogEntry };
+
+function buildDisplayList(
+  iterations: IterationSummary[],
+  iterationLogs: Map<number, LogEntry[]>,
+  foldedIterations: Set<number>,
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  for (const iter of iterations) {
+    const folded = foldedIterations.has(iter.iteration);
+    items.push({
+      type: "iteration-header",
+      iteration: iter.iteration,
+      entryCount: iter.entry_count,
+      folded,
+    });
+    if (!folded) {
+      const entries = iterationLogs.get(iter.iteration);
+      if (entries) {
+        for (const entry of entries) {
+          items.push({ type: "log-entry", entry });
+        }
+      }
+    }
+  }
+  return items;
+}
+
 interface LogViewProps {
-  logs: LogEntry[];
+  iterations: IterationSummary[];
+  iterationLogs: Map<number, LogEntry[]>;
+  foldedIterations: Set<number>;
+  onToggleFold: (iteration: number) => void;
   projectDir?: string;
   branchName?: string;
+  showToolOutput?: boolean;
+  toolOutputPreviewLines?: number;
   rateLimitMessage?: string | null;
 }
 
-export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogViewProps) {
+export function LogView({
+  iterations,
+  iterationLogs,
+  foldedIterations,
+  onToggleFold,
+  projectDir,
+  branchName,
+  showToolOutput = true,
+  toolOutputPreviewLines = 2,
+  rateLimitMessage,
+}: LogViewProps) {
   const worktreePrefix = projectDir && branchName
     ? `${projectDir}/.ralph/${branchName}-worktree`
     : undefined;
+
   const parentRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
 
+  const displayList = useMemo(
+    () => buildDisplayList(iterations, iterationLogs, foldedIterations),
+    [iterations, iterationLogs, foldedIterations],
+  );
+
   const virtualizer = useVirtualizer({
-    count: logs.length,
+    count: displayList.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => {
-      const log = logs[index];
+      const item = displayList[index];
+      if (!item) return 20;
+      if (item.type === "iteration-header") return 32;
+      const log = item.entry;
       if (log?.aiBlock) {
         switch (log.aiBlock.kind) {
           case "Text": return 20 * Math.min(log.aiBlock.text.split("\n").length, 5);
@@ -50,11 +106,17 @@ export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogV
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
+  const totalEntries = useMemo(() => {
+    let count = 0;
+    for (const iter of iterations) count += iter.entry_count;
+    return count;
+  }, [iterations]);
+
   useEffect(() => {
-    if (autoScrollRef.current && logs.length > 0) {
-      virtualizer.scrollToIndex(logs.length - 1, { align: "end" });
+    if (autoScrollRef.current && displayList.length > 0) {
+      virtualizer.scrollToIndex(displayList.length - 1, { align: "end" });
     }
-  }, [logs.length, virtualizer]);
+  }, [totalEntries, displayList.length, virtualizer]);
 
   const handleScroll = useCallback(() => {
     const el = parentRef.current;
@@ -111,7 +173,7 @@ export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogV
         }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
-          const log = logs[virtualRow.index];
+          const item = displayList[virtualRow.index];
           return (
             <div
               key={virtualRow.key}
@@ -126,12 +188,21 @@ export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogV
                 paddingBottom: 2,
               }}
             >
-              <LogRow log={log} worktreePrefix={worktreePrefix} />
+              {item.type === "iteration-header" ? (
+                <IterationHeader
+                  iteration={item.iteration}
+                  entryCount={item.entryCount}
+                  folded={item.folded}
+                  onToggle={() => onToggleFold(item.iteration)}
+                />
+              ) : (
+                <LogRow log={item.entry} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} showToolOutput={showToolOutput} />
+              )}
             </div>
           );
         })}
       </div>
-      {logs.length === 0 && (
+      {displayList.length === 0 && (
         <div style={{ color: "var(--text-muted)", fontStyle: "italic", padding: "16px" }}>
           No log output yet. Start the session to begin.
         </div>
@@ -140,25 +211,62 @@ export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogV
   );
 }
 
+function IterationHeader({
+  iteration,
+  entryCount,
+  folded,
+  onToggle,
+}: {
+  iteration: number;
+  entryCount: number;
+  folded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div
+      onClick={onToggle}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "4px 8px",
+        backgroundColor: "var(--bg-tertiary)",
+        borderRadius: 4,
+        cursor: "pointer",
+        fontSize: "12px",
+        color: "var(--text-secondary)",
+        userSelect: "none",
+      }}
+    >
+      <span style={{ fontSize: "10px", width: 12 }}>{folded ? "▸" : "▾"}</span>
+      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+        Iteration {iteration}
+      </span>
+      <span style={{ color: "var(--text-muted)" }}>
+        {entryCount} {entryCount === 1 ? "entry" : "entries"}
+      </span>
+      {folded && !entryCount && (
+        <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>empty</span>
+      )}
+    </div>
+  );
+}
+
 function shortenPath(path: string, worktreePrefix?: string): string {
-  if (!worktreePrefix) return path;
-  const normPath = path.replace(/\\/g, "/").toLowerCase();
-  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
-  if (normPath.startsWith(normPrefix)) {
-    return "⌂" + path.slice(normPrefix.length);
+  if (worktreePrefix && path.startsWith(worktreePrefix)) {
+    return "⌂" + path.slice(worktreePrefix.length);
   }
   return path;
 }
 
-/** Replace all occurrences of the worktree prefix in arbitrary text (e.g. bash commands). */
 function shortenText(text: string, worktreePrefix?: string): string {
   if (!worktreePrefix) return text;
   return text.split(worktreePrefix).join("⌂");
 }
 
-function LogRow({ log, worktreePrefix }: { log: LogEntry; worktreePrefix?: string }) {
+function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = true }: { log: LogEntry; worktreePrefix?: string; toolOutputPreviewLines?: number; showToolOutput?: boolean }) {
   if (log.aiBlock) {
-    return <AiBlockRow block={log.aiBlock} worktreePrefix={worktreePrefix} />;
+    return <AiBlockRow block={log.aiBlock} toolResult={showToolOutput ? log.toolResult : undefined} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} />;
   }
   if (log.housekeepingBlock) {
     return <HousekeepingRow block={log.housekeepingBlock} />;
@@ -176,16 +284,15 @@ function LogRow({ log, worktreePrefix }: { log: LogEntry; worktreePrefix?: strin
   );
 }
 
-// --- AI Content Blocks ---
-
-function AiBlockRow({ block, worktreePrefix }: { block: AiContentBlock; worktreePrefix?: string }) {
+function AiBlockRow({ block, toolResult, worktreePrefix, toolOutputPreviewLines }: { block: AiContentBlock; toolResult?: ToolResultData; worktreePrefix?: string; toolOutputPreviewLines?: number }) {
   switch (block.kind) {
     case "Text":
       return <AiTextBlock text={block.text} />;
     case "ToolUse":
-      return <ToolUseBlock tool={block.tool} worktreePrefix={worktreePrefix} />;
+      return <ToolUseBlock tool={block.tool} toolResult={toolResult} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} />;
     case "ToolResult":
-      return <ToolResultBlock content={block.content} isError={block.is_error} />;
+      // Standalone fallback (if no matching ToolUse was found)
+      return <ToolResultBlock content={block.content} isError={block.is_error} previewLines={toolOutputPreviewLines} />;
   }
 }
 
@@ -198,22 +305,24 @@ function AiTextBlock({ text }: { text: string }) {
 }
 
 const toolColors: Record<string, string> = {
-  Read: "#60a5fa",    // blue
-  Edit: "#fbbf24",    // yellow
-  Write: "#fbbf24",   // yellow
-  Bash: "#22d3ee",    // cyan
-  Glob: "#60a5fa",    // blue
-  Grep: "#60a5fa",    // blue
-  Other: "#a78bfa",   // purple
+  Read: "#60a5fa",
+  Edit: "#fbbf24",
+  Write: "#fbbf24",
+  Bash: "#22d3ee",
+  Glob: "#60a5fa",
+  Grep: "#60a5fa",
+  Other: "#a78bfa",
 };
 
-function ToolUseBlock({ tool, worktreePrefix }: { tool: ToolInvocation; worktreePrefix?: string }) {
+function ToolUseBlock({ tool, toolResult, worktreePrefix, toolOutputPreviewLines }: { tool: ToolInvocation; toolResult?: ToolResultData; worktreePrefix?: string; toolOutputPreviewLines?: number }) {
   const color = toolColors[tool.tool] ?? toolColors.Other;
-
   return (
     <div style={{ borderLeft: `2px solid ${color}`, paddingLeft: 8, margin: "2px 0" }}>
       {renderToolHeader(tool, color, worktreePrefix)}
       {renderToolDetail(tool)}
+      {toolResult && (
+        <ToolResultBlock content={toolResult.content} isError={toolResult.is_error} previewLines={toolOutputPreviewLines} />
+      )}
     </div>
   );
 }
@@ -255,8 +364,14 @@ function renderToolHeader(tool: ToolInvocation, color: string, worktreePrefix?: 
       return <div>{badge("Glob")}<span style={{ color: "#e2e8f0" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "#94a3b8" }}> in {fp(tool.path)}</span>}</div>;
     case "Grep":
       return <div>{badge("Grep")}<span style={{ color: "#e2e8f0" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "#94a3b8" }}> in {fp(tool.path)}</span>}</div>;
-    case "Other":
-      return <div>{badge(tool.name)}</div>;
+    case "Other": {
+      // Show a compact summary of the input arguments
+      const summary = Object.entries(tool.input)
+        .filter(([, v]) => typeof v === "string" || typeof v === "number")
+        .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+        .join(", ");
+      return <div>{badge(tool.name)}{summary && <span style={{ color: "#94a3b8" }}> {summary}</span>}</div>;
+    }
   }
 }
 
@@ -280,11 +395,11 @@ function renderToolDetail(tool: ToolInvocation) {
   return null;
 }
 
-function ToolResultBlock({ content, isError }: { content: string; isError: boolean }) {
+function ToolResultBlock({ content, isError, previewLines = 2 }: { content: string; isError: boolean; previewLines?: number }) {
   const [expanded, setExpanded] = useState(false);
   const lines = content.split("\n");
-  const isLong = lines.length > 5;
-  const displayLines = expanded ? lines : lines.slice(0, 5);
+  const isLong = lines.length > previewLines;
+  const displayLines = expanded ? lines : lines.slice(0, previewLines);
 
   if (!content.trim()) return null;
 
@@ -303,7 +418,7 @@ function ToolResultBlock({ content, isError }: { content: string; isError: boole
       ))}
       {isLong && !expanded && (
         <div style={{ color: "#64748b", fontStyle: "italic" }}>
-          ... {lines.length - 5} more lines (click to expand)
+          ... {lines.length - previewLines} more lines (click to expand)
         </div>
       )}
       {isLong && expanded && (
@@ -314,8 +429,6 @@ function ToolResultBlock({ content, isError }: { content: string; isError: boole
     </div>
   );
 }
-
-// --- Housekeeping Blocks ---
 
 function HousekeepingRow({ block }: { block: HousekeepingBlock }) {
   switch (block.kind) {

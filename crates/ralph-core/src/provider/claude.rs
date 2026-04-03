@@ -182,31 +182,52 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
             }
             false
         }
-        Some("tool") => {
-            let tool_use_id = value
-                .get("tool_use_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let is_error = value
-                .get("is_error")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let content = value
-                .get("content")
+        Some("user") => {
+            // Tool results come as "user" events with tool_result content blocks
+            if let Some(content) = value
+                .get("message")
+                .and_then(|m| m.get("content"))
                 .and_then(|c| c.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default();
-            let _ = output_tx.send(AiOutput::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            });
+            {
+                for item in content {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                        let tool_use_id = item
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let is_error = item
+                            .get("is_error")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let content_text = item
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let _ = output_tx.send(AiOutput::ToolResult {
+                            tool_use_id,
+                            content: content_text,
+                            is_error,
+                        });
+                    }
+                }
+            }
+            false
+        }
+        Some("rate_limit_event") => {
+            if let Some(info) = value.get("rate_limit_info") {
+                let status = info.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                if status.contains("blocked") || status.contains("exceeded") {
+                    let resets_at = info.get("resetsAt").and_then(|v| v.as_u64());
+                    let message = if let Some(ts) = resets_at {
+                        format!("Rate limited · resets at {}", format_reset_time(ts))
+                    } else {
+                        "Rate limited".to_string()
+                    };
+                    let _ = output_tx.send(AiOutput::RateLimited { message });
+                }
+            }
             false
         }
         Some("result") => {
@@ -225,5 +246,24 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
             true
         }
         _ => false,
+    }
+}
+
+fn format_reset_time(unix_secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if unix_secs > now {
+        let diff = unix_secs - now;
+        let hours = diff / 3600;
+        let mins = (diff % 3600) / 60;
+        if hours > 0 {
+            format!("{}h {}m from now", hours, mins)
+        } else {
+            format!("{}m from now", mins)
+        }
+    } else {
+        "now".to_string()
     }
 }

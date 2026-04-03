@@ -113,6 +113,7 @@ fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutpu
 
     match value.get("type").and_then(|t| t.as_str()) {
         Some("assistant.message_delta") => {
+            // Streaming text delta
             if let Some(text) = value
                 .get("data")
                 .and_then(|d| d.get("deltaContent"))
@@ -123,46 +124,56 @@ fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutpu
                 }
             }
         }
-        Some("assistant.tool_use") | Some("tool_use") => {
-            let tool_id = value
-                .get("id")
-                .or_else(|| value.get("data").and_then(|d| d.get("id")))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let tool_name = value
-                .get("name")
-                .or_else(|| value.get("data").and_then(|d| d.get("name")))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let input = value
-                .get("input")
-                .or_else(|| value.get("data").and_then(|d| d.get("input")))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let tool = parse_tool_invocation(tool_name, &input);
-            let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+        Some("assistant.message") => {
+            // Full message — text already received via message_delta events,
+            // tool requests will come via tool.execution_start events.
+            // Nothing to emit here.
         }
-        Some("tool_result") => {
-            let tool_use_id = value
-                .get("tool_use_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let is_error = value
-                .get("is_error")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let content = value
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let _ = output_tx.send(AiOutput::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            });
+        Some("tool.execution_start") => {
+            // Tool invocation started — already emitted from assistant.message toolRequests,
+            // but we can use this as a fallback
+            if let Some(data) = value.get("data") {
+                let tool_id = data
+                    .get("toolCallId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_name = data
+                    .get("toolName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let input = data
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let tool = parse_tool_invocation(tool_name, &input);
+                let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+            }
+        }
+        Some("tool.execution_complete") => {
+            // Tool result
+            if let Some(data) = value.get("data") {
+                let tool_use_id = data
+                    .get("toolCallId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let success = data
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let content = data
+                    .get("result")
+                    .and_then(|r| r.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let _ = output_tx.send(AiOutput::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error: !success,
+                });
+            }
         }
         Some("result") => {
             if let Some(sid) = value.get("sessionId").and_then(|s| s.as_str()) {

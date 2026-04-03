@@ -117,87 +117,189 @@ fn emit_non_empty(output_tx: &mpsc::UnboundedSender<AiOutput>, text: &str) {
 
 fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-        // Extract session_id from result events
-        if let Some(sid) = value.get("session_id").and_then(|s| s.as_str()) {
-            let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
-        }
+        let event_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let subtype = value.get("subtype").and_then(|t| t.as_str()).unwrap_or("");
 
-        match value.get("type").and_then(|t| t.as_str()) {
-            Some("assistant") => {
-                // Same structure as Claude's stream-json
+        match event_type {
+            "assistant" => {
+                // Text content in message.content[]
                 if let Some(content) = value
                     .get("message")
                     .and_then(|m| m.get("content"))
                     .and_then(|c| c.as_array())
                 {
                     for item in content {
-                        match item.get("type").and_then(|t| t.as_str()) {
-                            Some("text") => {
-                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                                    emit_non_empty(output_tx, text);
-                                }
+                        if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                emit_non_empty(output_tx, text);
                             }
-                            Some("tool_use") => {
-                                let tool_id = item
-                                    .get("id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let tool_name = item
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown");
-                                let input = item
-                                    .get("input")
-                                    .cloned()
-                                    .unwrap_or(serde_json::Value::Null);
-                                let tool = parse_tool_invocation(tool_name, &input);
-                                let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
-                            }
-                            _ => {}
                         }
                     }
                 }
             }
-            Some("tool") => {
-                let tool_use_id = value
-                    .get("tool_use_id")
+            "tool_call" if subtype == "started" => {
+                let call_id = value
+                    .get("call_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let is_error = value
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let content = value
-                    .get("content")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
-                let _ = output_tx.send(AiOutput::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error,
-                });
-            }
-            _ => {
-                // Fallback: try common text fields
-                if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
-                    emit_non_empty(output_tx, text);
-                } else if let Some(msg) = value.get("message").and_then(|m| m.as_str()) {
-                    emit_non_empty(output_tx, msg);
-                } else if let Some(content) = value.get("content").and_then(|c| c.as_str()) {
-                    emit_non_empty(output_tx, content);
+
+                if let Some(tc) = value.get("tool_call") {
+                    // Shell tool call
+                    if let Some(shell) = tc.get("shellToolCall") {
+                        let command = shell
+                            .get("args")
+                            .and_then(|a| a.get("command"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let description = shell
+                            .get("description")
+                            .or_else(|| tc.get("description"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let tool = crate::events::ToolInvocation::Bash { command, description };
+                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                    }
+                    // Edit tool call
+                    else if let Some(edit) = tc.get("editToolCall") {
+                        let file_path = edit
+                            .get("args")
+                            .and_then(|a| a.get("path").or_else(|| a.get("filePath")))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let tool = crate::events::ToolInvocation::Edit {
+                            file_path,
+                            old_string: String::new(),
+                            new_string: String::new(),
+                        };
+                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                    }
+                    // Read tool call
+                    else if let Some(read) = tc.get("readToolCall") {
+                        let file_path = read
+                            .get("args")
+                            .and_then(|a| a.get("filePath").or_else(|| a.get("path")))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let tool = crate::events::ToolInvocation::Read { file_path };
+                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                    }
+                    // Generic fallback — discover tool type from the key name (e.g. "listDirToolCall")
+                    else {
+                        // Find the *ToolCall key to get the tool type name
+                        let mut tool_name = String::from("tool");
+                        let mut args = serde_json::Value::Null;
+                        for (key, val) in tc.as_object().into_iter().flat_map(|m| m.iter()) {
+                            if key.ends_with("ToolCall") || key.ends_with("_tool_call") {
+                                tool_name = key
+                                    .trim_end_matches("ToolCall")
+                                    .trim_end_matches("_tool_call")
+                                    .to_string();
+                                args = val.get("args").cloned().unwrap_or(val.clone());
+                                break;
+                            }
+                        }
+                        // Try description as a fallback name
+                        if tool_name == "tool" {
+                            if let Some(desc) = tc.get("description").and_then(|v| v.as_str()) {
+                                tool_name = desc.to_string();
+                            }
+                        }
+                        // Map known cursor tool names to canonical names, then use parse_tool_invocation
+                        let canonical_name = match tool_name.as_str() {
+                            "listDir" | "list_dir" | "glob" | "find" => "Glob",
+                            "grep" | "search" | "codebaseSearch" | "codebase_search" => "Grep",
+                            "edit" | "write" | "create" => "Edit",
+                            "read" | "view" => "Read",
+                            "bash" | "terminal" | "shell" => "Bash",
+                            other => other,
+                        };
+                        let tool = parse_tool_invocation(canonical_name, &args);
+                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                    }
                 }
             }
+            "tool_call" if subtype == "completed" => {
+                let call_id = value
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if let Some(tc) = value.get("tool_call") {
+                    // Find the tool-specific object (shellToolCall, readToolCall, etc.)
+                    // and extract the result from it
+                    let mut found = false;
+                    for (key, tool_obj) in tc.as_object().into_iter().flat_map(|m| m.iter()) {
+                        if !key.ends_with("ToolCall") && !key.ends_with("_tool_call") {
+                            continue;
+                        }
+                        let Some(result) = tool_obj.get("result") else { continue };
+                        found = true;
+
+                        if let Some(success) = result.get("success") {
+                            // Shell tool: stdout/stderr/exitCode
+                            if let Some(stdout) = success.get("stdout").and_then(|v| v.as_str()) {
+                                let stderr = success.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+                                let exit_code = success.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let content = if stderr.is_empty() {
+                                    stdout.to_string()
+                                } else {
+                                    format!("{}\n{}", stdout, stderr)
+                                };
+                                let _ = output_tx.send(AiOutput::ToolResult {
+                                    tool_use_id: call_id.clone(),
+                                    content,
+                                    is_error: exit_code != 0,
+                                });
+                            }
+                            // Read/other tools: content field, diffString, or message
+                            else if let Some(content) = success.get("content")
+                                .or_else(|| success.get("diffString"))
+                                .or_else(|| success.get("message"))
+                                .and_then(|v| v.as_str())
+                            {
+                                let _ = output_tx.send(AiOutput::ToolResult {
+                                    tool_use_id: call_id.clone(),
+                                    content: content.to_string(),
+                                    is_error: false,
+                                });
+                            }
+                        } else if let Some(err) = result.get("error").or_else(|| result.get("failure")) {
+                            let msg = err.get("stdout")
+                                .or_else(|| err.get("message"))
+                                .or_else(|| err.get("errorMessage"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("error");
+                            let _ = output_tx.send(AiOutput::ToolResult {
+                                tool_use_id: call_id.clone(),
+                                content: msg.to_string(),
+                                is_error: true,
+                            });
+                        }
+                        break;
+                    }
+                    if !found {
+                        // Last resort: emit empty result so the UI doesn't hang
+                        let _ = output_tx.send(AiOutput::ToolResult {
+                            tool_use_id: call_id,
+                            content: String::new(),
+                            is_error: false,
+                        });
+                    }
+                }
+            }
+            "result" => {
+                if let Some(sid) = value.get("session_id").and_then(|s| s.as_str()) {
+                    let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
+                }
+            }
+            _ => {}
         }
     } else if !line.trim().is_empty() {
-        // Plain text fallback
         let _ = output_tx.send(AiOutput::Text(line.to_string()));
     }
 }

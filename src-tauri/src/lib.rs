@@ -20,6 +20,8 @@ pub fn run() {
             commands::abort_session,
             commands::remove_session,
             commands::list_sessions,
+            commands::list_log_iterations,
+            commands::read_log_iteration,
             commands::get_available_tools,
             commands::resume_session,
             commands::send_recovery_action,

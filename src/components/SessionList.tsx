@@ -85,7 +85,7 @@ export function SessionList({
               {session.config.mode}
             </span>
             <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-              {session.config.ai_tool}
+              {session.config.ai_tool.charAt(0).toUpperCase() + session.config.ai_tool.slice(1)}
             </span>
             {session.iterationCount > 0 && (
               <span

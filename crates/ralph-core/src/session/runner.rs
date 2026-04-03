@@ -11,6 +11,22 @@ use crate::git::ops::{GitOps, RebaseError};
 use crate::provider::{create_provider, AiOutput, AiProvider};
 use crate::session::state::{SessionConfig, SessionId, SessionStatus, SessionStep};
 
+/// Order value for steps, used to determine which steps to skip on resume.
+fn step_order(step: &SessionStep) -> u32 {
+    match step {
+        SessionStep::Idle => 0,
+        SessionStep::Checkout => 1,
+        SessionStep::RebasePreAi => 2,
+        SessionStep::RunningAi => 3,
+        SessionStep::PushBranch => 4,
+        SessionStep::RebasePostAi => 5,
+        SessionStep::PushToMain => 6,
+        SessionStep::Tagging => 7,
+        SessionStep::RecoveringGit => 1, // treat as early step
+        SessionStep::Paused => 3,        // treat as AI step
+    }
+}
+
 /// Distinguishes transient errors (retry next iteration) from permanent ones (stop session).
 #[derive(Debug)]
 enum RunError {
@@ -38,6 +54,8 @@ pub async fn run_session(
     mut abort_rx: watch::Receiver<bool>,
     mut action_rx: mpsc::Receiver<RecoveryAction>,
     resume_ai_session_id: Option<String>,
+    resume_step: Option<SessionStep>,
+    resume_iteration: Option<u32>,
 ) {
     let emit_event = |payload: SessionEventPayload| {
         emit(SessionEvent {
@@ -82,9 +100,11 @@ pub async fn run_session(
         ),
     );
 
-    let mut iteration = 0u32;
+    let mut iteration = resume_iteration.unwrap_or(0);
     // AI session ID for crash recovery resume. Set from Aborted state or captured during run.
     let mut current_ai_session_id: Option<String> = resume_ai_session_id;
+    // On resume, skip steps before the one that was interrupted
+    let mut skip_to_step: Option<SessionStep> = resume_step;
 
     let mut stash_pending = false; // true if we stashed changes that need to be popped after rebase
 
@@ -94,9 +114,27 @@ pub async fn run_session(
             break;
         }
 
-        iteration += 1;
+        // On resume, reuse the interrupted iteration number; otherwise increment
+        if skip_to_step.is_some() {
+            emit_log(
+                LogCategory::Script,
+                format!("Resuming at {:?} (iteration {})", skip_to_step.as_ref().unwrap(), iteration),
+            );
+        } else {
+            iteration += 1;
+        }
+
+        // On resume, skip pre-AI steps if we crashed during or after the AI step
+        let skip_pre_ai = skip_to_step.as_ref().map_or(false, |s| step_order(s) >= step_order(&SessionStep::RunningAi));
+        // Clear skip_to_step after this iteration so subsequent iterations run normally
+        skip_to_step = None;
+
+        if skip_pre_ai {
+            emit_log(LogCategory::Script, "Skipping checkout/rebase (resuming at AI step)".to_string());
+        }
 
         // Step 0: Checkout branch (with full recovery pipeline)
+        if !skip_pre_ai {
         emit_status(SessionStatus::Running {
             step: SessionStep::Checkout,
             iteration,
@@ -298,6 +336,7 @@ pub async fn run_session(
                 }
             }
         }
+        } // end if !skip_pre_ai
 
         // Step b: Run AI
         emit_status(SessionStatus::Running {

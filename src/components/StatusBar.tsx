@@ -8,6 +8,8 @@ interface StatusBarProps {
   aiTool: string;
   shortenPaths: boolean;
   onToggleShortenPaths: () => void;
+  showToolOutput: boolean;
+  onToggleShowToolOutput: () => void;
 }
 
 function getStepLabel(step: SessionStep): string {
@@ -65,6 +67,8 @@ export function StatusBar({
   aiTool,
   shortenPaths,
   onToggleShortenPaths,
+  showToolOutput,
+  onToggleShowToolOutput,
 }: StatusBarProps) {
   const info = getStatusInfo(status);
 
@@ -114,6 +118,22 @@ export function StatusBar({
           title={shortenPaths ? "Showing shortened paths (⌂)" : "Showing full paths"}
         >
           ⌂ {shortenPaths ? "on" : "off"}
+        </button>
+        <button
+          onClick={onToggleShowToolOutput}
+          style={{
+            background: "none",
+            border: "1px solid var(--border-primary)",
+            borderRadius: 3,
+            color: showToolOutput ? "var(--accent-blue)" : "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: "11px",
+            padding: "1px 6px",
+            marginLeft: 4,
+          }}
+          title={showToolOutput ? "Showing tool output" : "Hiding tool output"}
+        >
+          tool output {showToolOutput ? "on" : "off"}
         </button>
       </span>
     </div>

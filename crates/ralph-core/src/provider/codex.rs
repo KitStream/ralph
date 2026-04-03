@@ -4,7 +4,9 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{parse_tool_invocation, AiOutput, AiProvider};
+use crate::events::ToolInvocation;
+
+use super::{AiOutput, AiProvider};
 
 pub struct CodexProvider;
 
@@ -99,44 +101,57 @@ fn parse_codex_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>
                 let _ = output_tx.send(AiOutput::SessionId(tid.to_string()));
             }
         }
-        Some("item.completed") => {
+        Some("item.completed") | Some("item.started") => {
             if let Some(item) = value.get("item") {
                 let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 match item_type {
-                    "function_call" => {
+                    "command_execution" => {
                         let tool_id = item
                             .get("id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let tool_name = item
-                            .get("name")
+                        let command = item
+                            .get("command")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let input: serde_json::Value = item
-                            .get("arguments")
-                            .and_then(|a| a.as_str())
-                            .and_then(|s| serde_json::from_str(s).ok())
-                            .unwrap_or(serde_json::Value::Null);
-                        let tool = parse_tool_invocation(tool_name, &input);
-                        let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+                            .unwrap_or("")
+                            .to_string();
+                        let status = item
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if status == "in_progress" {
+                            // item.started — emit tool use
+                            let tool = ToolInvocation::Bash {
+                                command,
+                                description: None,
+                            };
+                            let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+                        } else if status == "completed" {
+                            // item.completed — emit tool result
+                            let output = item
+                                .get("aggregated_output")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let exit_code = item
+                                .get("exit_code")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0);
+                            let _ = output_tx.send(AiOutput::ToolResult {
+                                tool_use_id: tool_id,
+                                content: output,
+                                is_error: exit_code != 0,
+                            });
+                        }
                     }
-                    "function_call_output" => {
-                        let tool_use_id = item
-                            .get("call_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let content = item
-                            .get("output")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let _ = output_tx.send(AiOutput::ToolResult {
-                            tool_use_id,
-                            content,
-                            is_error: false,
-                        });
+                    "agent_message" => {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            if !text.trim().is_empty() {
+                                let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                            }
+                        }
                     }
                     _ => {
                         if let Some(text) = item.get("text").and_then(|t| t.as_str()) {

@@ -164,6 +164,23 @@ pub async fn list_sessions(
     Ok(manager.list_sessions().await)
 }
 
+#[tauri::command]
+pub async fn list_log_iterations(
+    manager: State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> Result<Vec<ralph_core::session::log_store::IterationSummary>, String> {
+    Ok(manager.list_iterations(&session_id))
+}
+
+#[tauri::command]
+pub async fn read_log_iteration(
+    manager: State<'_, Arc<SessionManager>>,
+    session_id: String,
+    iteration: u32,
+) -> Result<Vec<ralph_core::session::log_store::LogRecord>, String> {
+    Ok(manager.read_iteration(&session_id, iteration))
+}
+
 #[derive(Debug, Serialize)]
 pub struct AiToolInfo {
     pub id: String,

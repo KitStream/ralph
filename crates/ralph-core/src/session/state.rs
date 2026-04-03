@@ -77,6 +77,10 @@ pub enum SessionStatus {
     Stopped,
     Aborted {
         ai_session_id: Option<String>,
+        #[serde(default)]
+        step: Option<SessionStep>,
+        #[serde(default)]
+        iteration: Option<u32>,
     },
     Failed {
         error: String,

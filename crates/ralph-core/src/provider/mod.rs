@@ -59,6 +59,7 @@ pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvoc
     };
 
     match name {
+        // Claude tools
         "Read" => ToolInvocation::Read {
             file_path: str_field("file_path"),
         },
@@ -75,11 +76,42 @@ pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvoc
             command: str_field("command"),
             description: opt_str_field("description"),
         },
-        "Glob" => ToolInvocation::Glob {
+        "Glob" => {
+            let pattern = opt_str_field("pattern")
+                .or_else(|| opt_str_field("globPattern"))
+                .unwrap_or_default();
+            let path = opt_str_field("path")
+                .or_else(|| opt_str_field("targetDirectory"));
+            ToolInvocation::Glob { pattern, path }
+        }
+        "Grep" => {
+            let pattern = opt_str_field("pattern")
+                .or_else(|| opt_str_field("query"))
+                .or_else(|| opt_str_field("searchQuery"))
+                .unwrap_or_default();
+            let path = opt_str_field("path")
+                .or_else(|| opt_str_field("directory"))
+                .or_else(|| opt_str_field("targetDirectory"));
+            ToolInvocation::Grep { pattern, path, include: opt_str_field("include") }
+        }
+        // Copilot tools
+        "view" => ToolInvocation::Read {
+            file_path: str_field("path"),
+        },
+        "edit" | "write" | "create" => ToolInvocation::Edit {
+            file_path: str_field("path"),
+            old_string: str_field("old_string"),
+            new_string: str_field("new_string"),
+        },
+        "bash" | "terminal" => ToolInvocation::Bash {
+            command: str_field("command"),
+            description: opt_str_field("description"),
+        },
+        "glob" | "find" => ToolInvocation::Glob {
             pattern: str_field("pattern"),
             path: opt_str_field("path"),
         },
-        "Grep" => ToolInvocation::Grep {
+        "grep" | "search" => ToolInvocation::Grep {
             pattern: str_field("pattern"),
             path: opt_str_field("path"),
             include: opt_str_field("include"),

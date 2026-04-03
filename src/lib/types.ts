@@ -22,7 +22,7 @@ export type SessionStatus =
   | { Running: { step: SessionStep; iteration: number } }
   | { Stopping: { step: SessionStep; iteration: number } }
   | "Stopped"
-  | { Aborted: { ai_session_id: string | null } }
+  | { Aborted: { ai_session_id: string | null; step: SessionStep | null; iteration: number | null } }
   | { Failed: { error: string } };
 
 export type SessionStep =
@@ -58,6 +58,11 @@ export type HousekeepingBlock =
   | { kind: "DiffStat"; stat: string }
   | { kind: "Recovery"; action: string; detail: string };
 
+export interface ToolResultData {
+  content: string;
+  is_error: boolean;
+}
+
 export interface LogEntry {
   id: number;
   category: LogCategory;
@@ -65,9 +70,21 @@ export interface LogEntry {
   timestamp: number;
   aiBlock?: AiContentBlock;
   housekeepingBlock?: HousekeepingBlock;
+  toolResult?: ToolResultData;
 }
 
 export type LogCategory = "Git" | "Ai" | "Script" | "Warning" | "Error";
+
+export interface IterationSummary {
+  iteration: number;
+  entry_count: number;
+}
+
+export interface LogRecord {
+  line_no: number;
+  timestamp: number;
+  payload: SessionEventPayload;
+}
 
 export interface SessionState {
   id: string;
@@ -75,7 +92,10 @@ export interface SessionState {
   status: SessionStatus;
   lastTag: string | null;
   iterationCount: number;
-  logs: LogEntry[];
+  iterations: IterationSummary[];
+  iterationLogs: Map<number, LogEntry[]>;
+  foldedIterations: Set<number>;
+  currentIteration: number;
   recoveryRequest: RecoveryRequest | null;
   rateLimitMessage: string | null;
 }
@@ -99,6 +119,7 @@ export interface AppSettings {
   default_tagging_enabled: boolean;
   recent_project_dirs: string[];
   recent_preambles: string[];
+  tool_output_preview_lines: number;
 }
 
 export type LayoutMode = "Sidebar" | "Tabs" | "Split";
