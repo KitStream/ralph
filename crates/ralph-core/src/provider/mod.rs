@@ -134,6 +134,22 @@ pub fn detect_rate_limit(text: &str) -> bool {
         || lower.contains("token limit")
 }
 
+/// Information about a single model available for a backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub label: String,
+    pub is_default: bool,
+}
+
+/// Configuration describing available models for a backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendModelConfig {
+    pub models: Vec<ModelInfo>,
+    pub supports_freeform: bool,
+    pub current_model: Option<String>,
+}
+
 /// Which AI tool to use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AiTool {
@@ -173,6 +189,15 @@ pub trait AiProvider: Send + Sync {
     /// Human-readable name.
     fn name(&self) -> &str;
 
+    /// List available models for this backend.
+    async fn list_models(&self) -> BackendModelConfig {
+        BackendModelConfig {
+            models: vec![],
+            supports_freeform: true,
+            current_model: None,
+        }
+    }
+
     /// Run the AI tool in the given working directory with the given prompt.
     /// Streams output into `output_tx`.
     /// Returns Ok(()) on success, Err on failure.
@@ -180,6 +205,7 @@ pub trait AiProvider: Send + Sync {
         &self,
         working_dir: &Path,
         prompt: &str,
+        model: Option<&str>,
         resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         abort: watch::Receiver<bool>,

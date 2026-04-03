@@ -1,11 +1,32 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+
+fn copilot_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".copilot").join("config.json"))
+}
+
+fn read_copilot_current_model() -> Option<String> {
+    let path = copilot_config_path()?;
+    let data = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    json.get("model").and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn copilot_known_models() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo { id: "claude-sonnet-4.6".into(), label: "Claude Sonnet 4.6".into(), is_default: false },
+        ModelInfo { id: "claude-opus-4.6".into(), label: "Claude Opus 4.6".into(), is_default: false },
+        ModelInfo { id: "gpt-5.2".into(), label: "GPT-5.2".into(), is_default: false },
+        ModelInfo { id: "gpt-5-mini".into(), label: "GPT-5 mini".into(), is_default: false },
+        ModelInfo { id: "gpt-4.1".into(), label: "GPT-4.1".into(), is_default: false },
+    ]
+}
 
 pub struct CopilotProvider;
 
@@ -15,10 +36,41 @@ impl AiProvider for CopilotProvider {
         "Copilot"
     }
 
+    async fn list_models(&self) -> BackendModelConfig {
+        let current = read_copilot_current_model();
+        let mut models = copilot_known_models();
+
+        // Mark the current model as default if found in the list
+        let matched = if let Some(cur) = &current {
+            models.iter_mut().any(|m| {
+                if m.id == *cur {
+                    m.is_default = true;
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            false
+        };
+        if !matched {
+            if let Some(m) = models.first_mut() {
+                m.is_default = true;
+            }
+        }
+
+        BackendModelConfig {
+            current_model: current,
+            models,
+            supports_freeform: true,
+        }
+    }
+
     async fn run(
         &self,
         working_dir: &Path,
         prompt: &str,
+        model: Option<&str>,
         resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
@@ -31,6 +83,10 @@ impl AiProvider for CopilotProvider {
             .arg("--allow-all")
             .arg("--output-format")
             .arg("json");
+
+        if let Some(m) = model {
+            cmd.arg("--model").arg(m);
+        }
 
         if let Some(id) = resume_session_id {
             cmd.arg(format!("--resume={}", id));

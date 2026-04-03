@@ -520,6 +520,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           preamble: req.preamble,
           tagging_enabled: req.tagging_enabled,
           ai_tool: req.ai_tool,
+          model: req.model,
         },
         "Created",
         0,

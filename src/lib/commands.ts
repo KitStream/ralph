@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ModeInfo,
   AiToolInfo,
+  BackendModelConfig,
   SessionInfo,
   AppSettings,
   IterationSummary,
@@ -17,6 +18,7 @@ export interface CreateSessionRequest {
   preamble: string;
   tagging_enabled: boolean;
   ai_tool: string;
+  model: string | null;
 }
 
 export async function discoverModes(projectDir: string): Promise<ModeInfo[]> {
@@ -59,6 +61,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
 export async function getAvailableTools(): Promise<AiToolInfo[]> {
   return invoke("get_available_tools");
+}
+
+export async function listBackendModels(tool: string): Promise<BackendModelConfig> {
+  return invoke("list_backend_models", { tool });
 }
 
 export async function getSettings(): Promise<AppSettings> {

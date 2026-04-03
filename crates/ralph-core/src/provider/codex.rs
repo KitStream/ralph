@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
@@ -6,7 +6,51 @@ use tokio::sync::{mpsc, watch};
 
 use crate::events::ToolInvocation;
 
-use super::{AiOutput, AiProvider};
+use super::{AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+
+fn codex_models_cache_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex").join("models_cache.json"))
+}
+
+fn parse_codex_models_cache(path: &Path) -> Option<BackendModelConfig> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let models_arr = json.get("models")?.as_array()?;
+
+    let mut models = Vec::new();
+    let mut first_id = None;
+    for m in models_arr {
+        let visibility = m.get("visibility").and_then(|v| v.as_str()).unwrap_or("");
+        if visibility != "list" {
+            continue;
+        }
+        let slug = m.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let display_name = m
+            .get("display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&slug)
+            .to_string();
+        if first_id.is_none() {
+            first_id = Some(slug.clone());
+        }
+        models.push(ModelInfo {
+            id: slug,
+            label: display_name,
+            is_default: false,
+        });
+    }
+
+    // Mark the first model as default (highest priority in the cache)
+    if let Some(first) = models.first_mut() {
+        first.is_default = true;
+    }
+
+    Some(BackendModelConfig {
+        current_model: first_id,
+        models,
+        supports_freeform: true,
+    })
+}
 
 pub struct CodexProvider;
 
@@ -16,10 +60,31 @@ impl AiProvider for CodexProvider {
         "Codex"
     }
 
+    async fn list_models(&self) -> BackendModelConfig {
+        // Try reading from ~/.codex/models_cache.json (populated by the codex CLI)
+        if let Some(path) = codex_models_cache_path() {
+            if let Some(config) = parse_codex_models_cache(&path) {
+                if !config.models.is_empty() {
+                    return config;
+                }
+            }
+        }
+        // Fallback
+        BackendModelConfig {
+            models: vec![
+                ModelInfo { id: "o3".into(), label: "o3".into(), is_default: true },
+                ModelInfo { id: "o4-mini".into(), label: "o4-mini".into(), is_default: false },
+            ],
+            supports_freeform: true,
+            current_model: Some("o3".into()),
+        }
+    }
+
     async fn run(
         &self,
         working_dir: &Path,
         prompt: &str,
+        model: Option<&str>,
         resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
@@ -27,7 +92,6 @@ impl AiProvider for CodexProvider {
         let mut cmd = Command::new("codex");
 
         if let Some(id) = resume_session_id {
-            // codex exec resume <thread-id> <prompt> --json ...
             cmd.args(["exec", "resume"])
                 .arg(id)
                 .arg(prompt)
@@ -37,6 +101,10 @@ impl AiProvider for CodexProvider {
             cmd.args(["exec", "--dangerously-bypass-approvals-and-sandbox"])
                 .arg(prompt)
                 .arg("--json");
+        }
+
+        if let Some(m) = model {
+            cmd.arg("--model").arg(m);
         }
 
         let mut child = cmd

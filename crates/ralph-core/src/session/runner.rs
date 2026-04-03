@@ -243,7 +243,7 @@ pub async fn run_session(
 
                         let commit_task = tokio::spawn(async move {
                             provider_clone
-                                .run(&working_dir, commit_prompt, None, output_tx, abort_clone)
+                                .run(&working_dir, commit_prompt, None, None, output_tx, abort_clone)
                                 .await
                         });
 
@@ -390,10 +390,11 @@ pub async fn run_session(
                 }
             };
             let provider_clone = provider.clone();
+            let model_clone = config.model.clone();
 
             let ai_task = tokio::spawn(async move {
                 provider_clone
-                    .run(&working_dir, &prompt_clone, resume_id.as_deref(), output_tx, abort_clone)
+                    .run(&working_dir, &prompt_clone, model_clone.as_deref(), resume_id.as_deref(), output_tx, abort_clone)
                     .await
             });
 
@@ -645,7 +646,7 @@ async fn rebase_with_conflict_resolution(
 
                 let resolve_task = tokio::spawn(async move {
                     provider_clone
-                        .run(&working_dir, &conflict_prompt, None, output_tx, abort_clone)
+                        .run(&working_dir, &conflict_prompt, None, None, output_tx, abort_clone)
                         .await
                 });
 
@@ -741,7 +742,7 @@ async fn recover_with_ai(
 
     let task = tokio::spawn(async move {
         provider_clone
-            .run(&working_dir, &prompt, None, output_tx, abort_clone)
+            .run(&working_dir, &prompt, None, None, output_tx, abort_clone)
             .await
     });
 

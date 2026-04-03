@@ -1,5 +1,19 @@
 import type { SessionState, SessionStatus } from "../lib/types";
 
+function abbreviateModel(model: string | null | undefined): string {
+  if (!model) return "";
+  // Common abbreviations
+  const lower = model.toLowerCase();
+  if (lower.includes("sonnet")) return "Son";
+  if (lower.includes("opus")) return "Opus";
+  if (lower.includes("haiku")) return "Hai";
+  if (lower.startsWith("gpt-")) return model.replace("gpt-", "").replace("-mini", "m");
+  if (lower.startsWith("o") && /^o\d/.test(lower)) return model;
+  if (lower.includes("gemini")) return "Gem";
+  // Fallback: first 6 chars
+  return model.length > 6 ? model.slice(0, 6) : model;
+}
+
 interface SessionListProps {
   sessions: SessionState[];
   activeId: string | null;
@@ -86,6 +100,7 @@ export function SessionList({
             </span>
             <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
               {session.config.ai_tool.charAt(0).toUpperCase() + session.config.ai_tool.slice(1)}
+              {session.config.model ? ` ${abbreviateModel(session.config.model)}` : ""}
             </span>
             {session.iterationCount > 0 && (
               <span

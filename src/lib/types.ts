@@ -7,6 +7,7 @@ export interface SessionConfig {
   preamble: string;
   tagging_enabled: boolean;
   ai_tool: string;
+  model: string | null;
 }
 
 export interface SessionInfo {
@@ -109,6 +110,19 @@ export interface ModeInfo {
 export interface AiToolInfo {
   id: string;
   name: string;
+  available: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  label: string;
+  is_default: boolean;
+}
+
+export interface BackendModelConfig {
+  models: ModelInfo[];
+  supports_freeform: boolean;
+  current_model: string | null;
 }
 
 export interface AppSettings {

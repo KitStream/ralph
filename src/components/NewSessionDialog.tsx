@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDiscovery } from "../hooks/useDiscovery";
 import { useSessions } from "../hooks/useSessions";
-import { getAvailableTools } from "../lib/commands";
-import type { AiToolInfo } from "../lib/types";
+import { getAvailableTools, listBackendModels } from "../lib/commands";
+import type { AiToolInfo, BackendModelConfig } from "../lib/types";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -31,6 +31,12 @@ export function NewSessionDialog({
     state.settings.default_tagging_enabled
   );
   const [aiTool, setAiTool] = useState(state.settings.default_ai_tool);
+  const [model, setModel] = useState<string | null>(null);
+  const [modelConfig, setModelConfig] = useState<BackendModelConfig | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [customModel, setCustomModel] = useState("");
+  const [useCustom, setUseCustom] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [autoStart, setAutoStart] = useState(true);
 
   useEffect(() => {
@@ -46,6 +52,24 @@ export function NewSessionDialog({
       setPreamble(state.settings.recent_preambles[0] ?? "");
     }
   }, [isOpen, state.settings]);
+
+  useEffect(() => {
+    if (aiTool) {
+      setModelLoading(true);
+      setModel(null);
+      setUseCustom(false);
+      setCustomModel("");
+      listBackendModels(aiTool)
+        .then((config) => {
+          setModelConfig(config);
+          setModel(config.current_model);
+        })
+        .catch(() => {
+          setModelConfig({ models: [], supports_freeform: true, current_model: null });
+        })
+        .finally(() => setModelLoading(false));
+    }
+  }, [aiTool]);
 
   useEffect(() => {
     if (projectDir) {
@@ -78,6 +102,7 @@ export function NewSessionDialog({
     const mode = modes.find((m) => m.name === selectedMode);
     if (!mode) return;
 
+    const selectedModel = useCustom ? (customModel || null) : model;
     const id = await createSession({
       project_dir: projectDir,
       mode: selectedMode,
@@ -87,6 +112,7 @@ export function NewSessionDialog({
       preamble,
       tagging_enabled: taggingEnabled,
       ai_tool: aiTool,
+      model: selectedModel,
     });
 
     if (autoStart) {
@@ -186,29 +212,126 @@ export function NewSessionDialog({
             onChange={(e) => setAiTool(e.target.value)}
           >
             {tools.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+              <option key={t.id} value={t.id} disabled={!t.available}>
+                {t.name}{!t.available ? " (not installed)" : ""}
               </option>
             ))}
           </select>
         </div>
 
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Branch Name</label>
-          <input
-            style={inputStyle}
-            value={branchName}
-            onChange={(e) => setBranchName(e.target.value)}
-          />
-        </div>
+        <div style={{ marginBottom: 12 }}>
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: "4px 0",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <span style={{ display: "inline-block", transform: showAdvanced ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>
+              &#9654;
+            </span>
+            Advanced
+          </button>
+          {showAdvanced && (
+            <div style={{ paddingLeft: 12, borderLeft: "2px solid var(--border-primary)", marginTop: 8 }}>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Model</label>
+                {modelLoading ? (
+                  <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "6px 0" }}>
+                    Loading models...
+                  </div>
+                ) : modelConfig && (modelConfig.models.length > 0 || modelConfig.supports_freeform) ? (
+                  <>
+                    {modelConfig.models.length > 0 && !useCustom && (
+                      <select
+                        style={inputStyle}
+                        value={model ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === "__custom__") {
+                            setUseCustom(true);
+                            setModel(null);
+                          } else {
+                            setModel(val || null);
+                          }
+                        }}
+                      >
+                        <option value="">Default</option>
+                        {modelConfig.models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                        {modelConfig.supports_freeform && (
+                          <option value="__custom__">Custom...</option>
+                        )}
+                      </select>
+                    )}
+                    {(useCustom || (modelConfig.models.length === 0 && modelConfig.supports_freeform)) && (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input
+                          style={{ ...inputStyle, flex: 1 }}
+                          value={customModel}
+                          onChange={(e) => setCustomModel(e.target.value)}
+                          placeholder="Enter model name..."
+                        />
+                        {modelConfig.models.length > 0 && (
+                          <button
+                            onClick={() => {
+                              setUseCustom(false);
+                              setCustomModel("");
+                              setModel(modelConfig.current_model);
+                            }}
+                            style={{
+                              padding: "4px 8px",
+                              backgroundColor: "var(--bg-tertiary)",
+                              color: "var(--text-secondary)",
+                              border: "1px solid var(--border-primary)",
+                              borderRadius: 4,
+                              cursor: "pointer",
+                              fontSize: 11,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Back to list
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "6px 0" }}>
+                    No model selection available
+                  </div>
+                )}
+              </div>
 
-        <div style={fieldStyle}>
-          <label style={labelStyle}>Main Branch</label>
-          <input
-            style={inputStyle}
-            value={mainBranch}
-            onChange={(e) => setMainBranch(e.target.value)}
-          />
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Branch Name</label>
+                <input
+                  style={inputStyle}
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                />
+              </div>
+
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Main Branch</label>
+                <input
+                  style={inputStyle}
+                  value={mainBranch}
+                  onChange={(e) => setMainBranch(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={fieldStyle}>

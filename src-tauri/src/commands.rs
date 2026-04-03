@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use ralph_core::discovery;
 use ralph_core::events::{RecoveryAction, SessionEvent};
-use ralph_core::provider::AiTool;
+use ralph_core::provider::{AiTool, BackendModelConfig, create_provider};
 use ralph_core::session::manager::SessionManager;
 use ralph_core::session::state::{SessionConfig, SessionId};
 
@@ -39,6 +39,7 @@ pub struct CreateSessionRequest {
     pub preamble: String,
     pub tagging_enabled: bool,
     pub ai_tool: String,
+    pub model: Option<String>,
 }
 
 #[tauri::command]
@@ -78,6 +79,7 @@ pub async fn create_session(
         preamble: request.preamble,
         tagging_enabled: request.tagging_enabled,
         ai_tool,
+        model: request.model,
     };
 
     let id = manager.create_session(config).await;
@@ -185,6 +187,11 @@ pub async fn read_log_iteration(
 pub struct AiToolInfo {
     pub id: String,
     pub name: String,
+    pub available: bool,
+}
+
+fn is_on_path(cmd: &str) -> bool {
+    which::which(cmd).is_ok()
 }
 
 #[tauri::command]
@@ -193,20 +200,31 @@ pub fn get_available_tools() -> Vec<AiToolInfo> {
         AiToolInfo {
             id: "claude".to_string(),
             name: "Claude".to_string(),
+            available: is_on_path("claude"),
         },
         AiToolInfo {
             id: "codex".to_string(),
             name: "Codex".to_string(),
+            available: is_on_path("codex"),
         },
         AiToolInfo {
             id: "copilot".to_string(),
             name: "Copilot".to_string(),
+            available: is_on_path("copilot"),
         },
         AiToolInfo {
             id: "cursor".to_string(),
             name: "Cursor".to_string(),
+            available: is_on_path("cursor-agent"),
         },
     ]
+}
+
+#[tauri::command]
+pub async fn list_backend_models(tool: String) -> Result<BackendModelConfig, String> {
+    let ai_tool: AiTool = tool.parse().map_err(|e: String| e)?;
+    let provider = create_provider(&ai_tool);
+    Ok(provider.list_models().await)
 }
 
 #[tauri::command]

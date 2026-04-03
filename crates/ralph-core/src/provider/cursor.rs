@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
 
 pub struct CursorProvider;
 
@@ -15,10 +15,67 @@ impl AiProvider for CursorProvider {
         "Cursor"
     }
 
+    async fn list_models(&self) -> BackendModelConfig {
+        // Try to dynamically discover models via cursor-agent --list-models
+        match Command::new("cursor-agent")
+            .arg("--list-models")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let mut models = Vec::new();
+                let mut current = None;
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with("Available") || line.starts_with("---") {
+                        continue;
+                    }
+                    // Expected format: "id - Label  (default)" or "id - Label"
+                    let is_default = line.contains("(default)") || line.contains("(current)");
+                    let clean = line
+                        .replace("(default)", "")
+                        .replace("(current)", "");
+                    let parts: Vec<&str> = clean.splitn(2, " - ").collect();
+                    let id = parts[0].trim().to_string();
+                    let label = if parts.len() > 1 {
+                        parts[1].trim().to_string()
+                    } else {
+                        id.clone()
+                    };
+                    if is_default {
+                        current = Some(id.clone());
+                    }
+                    models.push(ModelInfo {
+                        id,
+                        label,
+                        is_default,
+                    });
+                }
+                BackendModelConfig {
+                    models,
+                    supports_freeform: false,
+                    current_model: current,
+                }
+            }
+            _ => {
+                // CLI not available or failed — fallback to freeform
+                BackendModelConfig {
+                    models: vec![],
+                    supports_freeform: true,
+                    current_model: None,
+                }
+            }
+        }
+    }
+
     async fn run(
         &self,
         working_dir: &Path,
         prompt: &str,
+        model: Option<&str>,
         resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
@@ -30,6 +87,10 @@ impl AiProvider for CursorProvider {
             .arg("--yolo")
             .arg("--output-format")
             .arg("stream-json");
+
+        if let Some(m) = model {
+            cmd.arg("--model").arg(m);
+        }
 
         if let Some(id) = resume_session_id {
             cmd.arg("--resume").arg(id);

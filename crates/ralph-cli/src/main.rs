@@ -38,6 +38,10 @@ struct Cli {
     /// AI backend to use
     #[arg(short = 'B', long, default_value = "claude")]
     backend: AiTool,
+
+    /// Model to use (backend-specific, e.g. "sonnet", "opus", "o3")
+    #[arg(short = 'm', long)]
+    model: Option<String>,
 }
 
 #[tokio::main]
@@ -85,6 +89,7 @@ async fn main() {
         preamble: cli.preamble,
         tagging_enabled: !cli.no_tag,
         ai_tool: cli.backend,
+        model: cli.model,
     };
 
     let id = SessionId::new();

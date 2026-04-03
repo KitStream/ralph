@@ -6,7 +6,14 @@ use tokio::sync::{mpsc, watch};
 
 use tokio::io::AsyncReadExt;
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+
+fn read_claude_current_model() -> Option<String> {
+    let path = dirs::home_dir()?.join(".claude").join("settings.json");
+    let data = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    json.get("model").and_then(|v| v.as_str()).map(|s| s.to_string())
+}
 
 pub struct ClaudeProvider;
 
@@ -16,10 +23,47 @@ impl AiProvider for ClaudeProvider {
         "Claude"
     }
 
+    async fn list_models(&self) -> BackendModelConfig {
+        let current = read_claude_current_model();
+        let mut models = vec![
+            ModelInfo { id: "sonnet".into(), label: "Sonnet".into(), is_default: false },
+            ModelInfo { id: "opus".into(), label: "Opus".into(), is_default: false },
+            ModelInfo { id: "haiku".into(), label: "Haiku".into(), is_default: false },
+        ];
+        // Mark the current model as default
+        let matched = if let Some(cur) = &current {
+            models.iter_mut().any(|m| {
+                if m.id == *cur {
+                    m.is_default = true;
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            false
+        };
+        // If no match (e.g. full model name like "claude-sonnet-4-6"), default to opus
+        if !matched {
+            for m in &mut models {
+                if m.id == "opus" {
+                    m.is_default = true;
+                    break;
+                }
+            }
+        }
+        BackendModelConfig {
+            current_model: current.or_else(|| Some("opus".into())),
+            models,
+            supports_freeform: true,
+        }
+    }
+
     async fn run(
         &self,
         working_dir: &Path,
         prompt: &str,
+        model: Option<&str>,
         resume_session_id: Option<&str>,
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
@@ -31,6 +75,10 @@ impl AiProvider for ClaudeProvider {
             .arg("--output-format")
             .arg("stream-json")
             .arg("--verbose");
+
+        if let Some(m) = model {
+            cmd.arg("--model").arg(m);
+        }
 
         if let Some(id) = resume_session_id {
             cmd.arg("--resume").arg(id);

@@ -23,6 +23,7 @@ pub fn run() {
             commands::list_log_iterations,
             commands::read_log_iteration,
             commands::get_available_tools,
+            commands::list_backend_models,
             commands::resume_session,
             commands::send_recovery_action,
             settings::get_settings,

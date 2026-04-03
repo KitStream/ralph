@@ -30,6 +30,8 @@ pub struct SessionConfig {
     pub preamble: String,
     pub tagging_enabled: bool,
     pub ai_tool: AiTool,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
