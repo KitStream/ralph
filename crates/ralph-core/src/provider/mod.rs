@@ -8,11 +8,28 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 
+use crate::events::ToolInvocation;
+
 /// Output from an AI tool process.
 #[derive(Debug, Clone)]
 pub enum AiOutput {
     /// Text content to display.
     Text(String),
+    /// AI invoked a tool (normalized).
+    ToolUse {
+        tool_id: String,
+        tool: ToolInvocation,
+    },
+    /// Result returned from a tool invocation.
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+    /// Rate limit hit — the AI provider wants us to wait.
+    RateLimited {
+        message: String,
+    },
     /// Execution finished with summary.
     Finished {
         duration_secs: f64,
@@ -22,6 +39,67 @@ pub enum AiOutput {
     Error(String),
     /// The AI backend's session ID (for crash recovery resume).
     SessionId(String),
+}
+
+/// Parse raw tool name + JSON input into a canonical ToolInvocation.
+/// All providers should call this to normalize their output.
+pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvocation {
+    let str_field = |field: &str| -> String {
+        input
+            .get(field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let opt_str_field = |field: &str| -> Option<String> {
+        input
+            .get(field)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    match name {
+        "Read" => ToolInvocation::Read {
+            file_path: str_field("file_path"),
+        },
+        "Edit" => ToolInvocation::Edit {
+            file_path: str_field("file_path"),
+            old_string: str_field("old_string"),
+            new_string: str_field("new_string"),
+        },
+        "Write" => ToolInvocation::Write {
+            file_path: str_field("file_path"),
+            content: str_field("content"),
+        },
+        "Bash" => ToolInvocation::Bash {
+            command: str_field("command"),
+            description: opt_str_field("description"),
+        },
+        "Glob" => ToolInvocation::Glob {
+            pattern: str_field("pattern"),
+            path: opt_str_field("path"),
+        },
+        "Grep" => ToolInvocation::Grep {
+            pattern: str_field("pattern"),
+            path: opt_str_field("path"),
+            include: opt_str_field("include"),
+        },
+        _ => ToolInvocation::Other {
+            name: name.to_string(),
+            input: input.clone(),
+        },
+    }
+}
+
+/// Check if text indicates a rate limit. Returns the message if it does.
+pub fn detect_rate_limit(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("hit your limit")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("quota exceeded")
+        || lower.contains("usage limit")
+        || lower.contains("token limit")
 }
 
 /// Which AI tool to use.

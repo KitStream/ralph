@@ -34,13 +34,37 @@ export type SessionStep =
   | "RebasePostAi"
   | "PushToMain"
   | "Tagging"
-  | "RecoveringGit";
+  | "RecoveringGit"
+  | "Paused";
+
+export type ToolInvocation =
+  | { tool: "Read"; file_path: string }
+  | { tool: "Edit"; file_path: string; old_string: string; new_string: string }
+  | { tool: "Write"; file_path: string; content: string }
+  | { tool: "Bash"; command: string; description: string | null }
+  | { tool: "Glob"; pattern: string; path: string | null }
+  | { tool: "Grep"; pattern: string; path: string | null; include: string | null }
+  | { tool: "Other"; name: string; input: Record<string, unknown> };
+
+export type AiContentBlock =
+  | { kind: "Text"; text: string }
+  | { kind: "ToolUse"; tool_id: string; tool: ToolInvocation }
+  | { kind: "ToolResult"; tool_use_id: string; content: string; is_error: boolean };
+
+export type HousekeepingBlock =
+  | { kind: "StepStarted"; step: SessionStep; description: string }
+  | { kind: "StepCompleted"; step: SessionStep; summary: string }
+  | { kind: "GitCommand"; command: string; output: string; success: boolean }
+  | { kind: "DiffStat"; stat: string }
+  | { kind: "Recovery"; action: string; detail: string };
 
 export interface LogEntry {
   id: number;
   category: LogCategory;
   text: string;
   timestamp: number;
+  aiBlock?: AiContentBlock;
+  housekeepingBlock?: HousekeepingBlock;
 }
 
 export type LogCategory = "Git" | "Ai" | "Script" | "Warning" | "Error";
@@ -53,6 +77,7 @@ export interface SessionState {
   iterationCount: number;
   logs: LogEntry[];
   recoveryRequest: RecoveryRequest | null;
+  rateLimitMessage: string | null;
 }
 
 export interface ModeInfo {
@@ -99,7 +124,10 @@ export interface RecoveryRequest {
 export type SessionEventPayload =
   | { type: "StatusChanged"; status: SessionStatus }
   | { type: "Log"; category: LogCategory; text: string }
+  | { type: "AiContent"; block: AiContentBlock }
+  | { type: "Housekeeping"; block: HousekeepingBlock }
   | { type: "IterationComplete"; iteration: number; tag: string | null }
   | { type: "Finished"; reason: string }
   | { type: "AiSessionIdChanged"; ai_session_id: string | null }
+  | { type: "RateLimited"; message: string }
   | { type: "ActionRequired"; error: string; options: RecoveryOption[] };

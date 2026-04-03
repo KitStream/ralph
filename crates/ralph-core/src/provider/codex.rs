@@ -4,7 +4,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{AiOutput, AiProvider};
+use super::{parse_tool_invocation, AiOutput, AiProvider};
 
 pub struct CodexProvider;
 
@@ -100,13 +100,51 @@ fn parse_codex_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>
             }
         }
         Some("item.completed") => {
-            if let Some(text) = value
-                .get("item")
-                .and_then(|i| i.get("text"))
-                .and_then(|t| t.as_str())
-            {
-                if !text.trim().is_empty() {
-                    let _ = output_tx.send(AiOutput::Text(text.to_string()));
+            if let Some(item) = value.get("item") {
+                let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match item_type {
+                    "function_call" => {
+                        let tool_id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let tool_name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let input: serde_json::Value = item
+                            .get("arguments")
+                            .and_then(|a| a.as_str())
+                            .and_then(|s| serde_json::from_str(s).ok())
+                            .unwrap_or(serde_json::Value::Null);
+                        let tool = parse_tool_invocation(tool_name, &input);
+                        let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+                    }
+                    "function_call_output" => {
+                        let tool_use_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let content = item
+                            .get("output")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let _ = output_tx.send(AiOutput::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: false,
+                        });
+                    }
+                    _ => {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            if !text.trim().is_empty() {
+                                let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                            }
+                        }
+                    }
                 }
             }
         }

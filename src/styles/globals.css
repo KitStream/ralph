@@ -116,3 +116,45 @@ button:hover {
 button:active {
   filter: brightness(0.9);
 }
+
+/* AI markdown rendering */
+.ai-markdown p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-markdown code {
+  background-color: var(--bg-tertiary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.ai-markdown pre {
+  background-color: var(--bg-tertiary);
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin: 4px 0;
+  overflow-x: auto;
+}
+
+.ai-markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.ai-markdown strong {
+  font-weight: 600;
+}
+
+.ai-markdown ul, .ai-markdown ol {
+  padding-left: 20px;
+  margin: 2px 0;
+}
+
+.ai-markdown h1, .ai-markdown h2, .ai-markdown h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 4px 0 2px;
+}

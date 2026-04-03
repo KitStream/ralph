@@ -15,6 +15,8 @@ import type {
   LogEntry,
   SessionStatus,
   AppSettings,
+  AiContentBlock,
+  HousekeepingBlock,
 } from "../lib/types";
 
 interface AppState {
@@ -106,7 +108,7 @@ function applyEvent(
 ): SessionState {
   switch (payload.type) {
     case "StatusChanged":
-      return { ...session, status: payload.status, recoveryRequest: null };
+      return { ...session, status: payload.status, recoveryRequest: null, rateLimitMessage: null };
 
     case "Log": {
       const entry: LogEntry = {
@@ -117,6 +119,31 @@ function applyEvent(
       };
       return { ...session, logs: [...session.logs, entry] };
     }
+
+    case "AiContent": {
+      const entry: LogEntry = {
+        id: ++logIdCounter,
+        category: "Ai",
+        text: summarizeAiBlock(payload.block),
+        timestamp: Date.now(),
+        aiBlock: payload.block,
+      };
+      return { ...session, logs: [...session.logs, entry] };
+    }
+
+    case "Housekeeping": {
+      const entry: LogEntry = {
+        id: ++logIdCounter,
+        category: "Git",
+        text: summarizeHousekeepingBlock(payload.block),
+        timestamp: Date.now(),
+        housekeepingBlock: payload.block,
+      };
+      return { ...session, logs: [...session.logs, entry] };
+    }
+
+    case "RateLimited":
+      return { ...session, rateLimitMessage: payload.message };
 
     case "IterationComplete":
       return {
@@ -140,6 +167,39 @@ function applyEvent(
 
     default:
       return session;
+  }
+}
+
+function summarizeAiBlock(block: AiContentBlock): string {
+  switch (block.kind) {
+    case "Text":
+      return block.text;
+    case "ToolUse": {
+      const t = block.tool;
+      switch (t.tool) {
+        case "Read": return `Read ${t.file_path}`;
+        case "Edit": return `Edit ${t.file_path}`;
+        case "Write": return `Write ${t.file_path}`;
+        case "Bash": return `$ ${t.command}`;
+        case "Glob": return `Glob ${t.pattern}`;
+        case "Grep": return `Grep ${t.pattern}`;
+        case "Other": return `${t.name}`;
+      }
+      break;
+    }
+    case "ToolResult":
+      return block.content.slice(0, 200);
+  }
+  return "";
+}
+
+function summarizeHousekeepingBlock(block: HousekeepingBlock): string {
+  switch (block.kind) {
+    case "StepStarted": return `▸ ${block.description}`;
+    case "StepCompleted": return `✓ ${block.summary}`;
+    case "GitCommand": return block.output;
+    case "DiffStat": return block.stat;
+    case "Recovery": return `${block.action}: ${block.detail}`;
   }
 }
 
@@ -190,6 +250,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           iterationCount: info.iteration_count,
           logs: [],
           recoveryRequest: null,
+          rateLimitMessage: null,
         });
       }
       if (sessions.size > 0) {
@@ -247,6 +308,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         iterationCount: 0,
         logs: [],
         recoveryRequest: null,
+        rateLimitMessage: null,
       };
       dispatch({ type: "ADD_SESSION", session });
       persistSessionDefaults(req);

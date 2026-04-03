@@ -4,7 +4,9 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{AiOutput, AiProvider};
+use tokio::io::AsyncReadExt;
+
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
 
 pub struct ClaudeProvider;
 
@@ -43,6 +45,7 @@ impl AiProvider for ClaudeProvider {
             .map_err(|e| anyhow::anyhow!("Failed to spawn claude: {}", e))?;
 
         let stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
         let reader = tokio::io::BufReader::new(stdout);
         let mut lines = reader.lines();
 
@@ -99,13 +102,26 @@ impl AiProvider for ClaudeProvider {
             }
         }
 
+        // Read stderr for rate limit detection
+        let mut stderr_buf = String::new();
+        stderr.read_to_string(&mut stderr_buf).await.ok();
+
         let status = child.wait().await?;
         if !status.success() {
-            let _ = output_tx.send(AiOutput::Error(format!(
-                "Claude exited with code {}",
-                status.code().unwrap_or(-1)
-            )));
-            anyhow::bail!("Claude exited with non-zero status");
+            // Check stderr for rate limit messages
+            if detect_rate_limit(&stderr_buf) {
+                let _ = output_tx.send(AiOutput::RateLimited {
+                    message: stderr_buf.trim().to_string(),
+                });
+                return Ok(());
+            }
+            let err_msg = if stderr_buf.trim().is_empty() {
+                format!("Claude exited with code {}", status.code().unwrap_or(-1))
+            } else {
+                format!("Claude exited with code {}: {}", status.code().unwrap_or(-1), stderr_buf.trim())
+            };
+            let _ = output_tx.send(AiOutput::Error(err_msg.clone()));
+            anyhow::bail!("{}", err_msg);
         }
 
         Ok(())
@@ -116,9 +132,15 @@ impl AiProvider for ClaudeProvider {
 /// Returns `true` if this was a "result" message (i.e. Claude is done).
 fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-        // Not JSON, emit as raw text
+        // Not JSON — check for rate limit, otherwise emit as raw text
         if !line.trim().is_empty() {
-            let _ = output_tx.send(AiOutput::Text(line.to_string()));
+            if detect_rate_limit(line) {
+                let _ = output_tx.send(AiOutput::RateLimited {
+                    message: line.trim().to_string(),
+                });
+            } else {
+                let _ = output_tx.send(AiOutput::Text(line.to_string()));
+            }
         }
         return false;
     };
@@ -131,13 +153,60 @@ fn parse_claude_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput
                 .and_then(|c| c.as_array())
             {
                 for item in content {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                            let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                    match item.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                            }
                         }
+                        Some("tool_use") => {
+                            let tool_id = item
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let tool_name = item
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let input = item
+                                .get("input")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            let tool = parse_tool_invocation(tool_name, &input);
+                            let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+                        }
+                        _ => {}
                     }
                 }
             }
+            false
+        }
+        Some("tool") => {
+            let tool_use_id = value
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let is_error = value
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let content = value
+                .get("content")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            let _ = output_tx.send(AiOutput::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            });
             false
         }
         Some("result") => {

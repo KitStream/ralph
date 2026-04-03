@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{AiOutput, AiProvider};
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
 
 pub struct CopilotProvider;
 
@@ -85,6 +85,12 @@ impl AiProvider for CopilotProvider {
         });
 
         if !status.success() {
+            if detect_rate_limit(&stderr_buf) {
+                let _ = output_tx.send(AiOutput::RateLimited {
+                    message: stderr_buf.trim().to_string(),
+                });
+                return Ok(());
+            }
             let err_msg = if stderr_buf.trim().is_empty() {
                 format!("Copilot exited with code {}", status.code().unwrap_or(-1))
             } else {
@@ -116,6 +122,47 @@ fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutpu
                     let _ = output_tx.send(AiOutput::Text(text.to_string()));
                 }
             }
+        }
+        Some("assistant.tool_use") | Some("tool_use") => {
+            let tool_id = value
+                .get("id")
+                .or_else(|| value.get("data").and_then(|d| d.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let tool_name = value
+                .get("name")
+                .or_else(|| value.get("data").and_then(|d| d.get("name")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let input = value
+                .get("input")
+                .or_else(|| value.get("data").and_then(|d| d.get("input")))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let tool = parse_tool_invocation(tool_name, &input);
+            let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+        }
+        Some("tool_result") => {
+            let tool_use_id = value
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let is_error = value
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let content = value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let _ = output_tx.send(AiOutput::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            });
         }
         Some("result") => {
             if let Some(sid) = value.get("sessionId").and_then(|s| s.as_str()) {

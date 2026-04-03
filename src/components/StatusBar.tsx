@@ -6,6 +6,8 @@ interface StatusBarProps {
   lastTag: string | null;
   mode: string;
   aiTool: string;
+  shortenPaths: boolean;
+  onToggleShortenPaths: () => void;
 }
 
 function getStepLabel(step: SessionStep): string {
@@ -19,6 +21,7 @@ function getStepLabel(step: SessionStep): string {
     PushToMain: "Pushing to main",
     Tagging: "Tagging",
     RecoveringGit: "Recovering git",
+    Paused: "Paused (rate limited)",
   };
   return labels[step] || step;
 }
@@ -60,6 +63,8 @@ export function StatusBar({
   lastTag,
   mode,
   aiTool,
+  shortenPaths,
+  onToggleShortenPaths,
 }: StatusBarProps) {
   const info = getStatusInfo(status);
 
@@ -92,8 +97,25 @@ export function StatusBar({
       {info.step && <span>Step: {info.step}</span>}
       <span>Mode: {mode}</span>
       <span>Backend: {aiTool}</span>
-      <span>Iterations: {iterationCount}</span>
+      <span>Iteration: {info.iteration ?? iterationCount}</span>
       {lastTag && <span>Last tag: {lastTag}</span>}
+      <span style={{ marginLeft: "auto" }}>
+        <button
+          onClick={onToggleShortenPaths}
+          style={{
+            background: "none",
+            border: "1px solid var(--border-primary)",
+            borderRadius: 3,
+            color: shortenPaths ? "var(--accent-blue)" : "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: "11px",
+            padding: "1px 6px",
+          }}
+          title={shortenPaths ? "Showing shortened paths (⌂)" : "Showing full paths"}
+        >
+          ⌂ {shortenPaths ? "on" : "off"}
+        </button>
+      </span>
     </div>
   );
 }

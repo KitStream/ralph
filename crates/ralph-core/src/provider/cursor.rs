@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{AiOutput, AiProvider};
+use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider};
 
 pub struct CursorProvider;
 
@@ -87,6 +87,12 @@ impl AiProvider for CursorProvider {
         });
 
         if !status.success() {
+            if detect_rate_limit(&stderr_buf) {
+                let _ = output_tx.send(AiOutput::RateLimited {
+                    message: stderr_buf.trim().to_string(),
+                });
+                return Ok(());
+            }
             let err_msg = if stderr_buf.trim().is_empty() {
                 format!("Cursor exited with code {}", status.code().unwrap_or(-1))
             } else {
@@ -116,31 +122,80 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
             let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
         }
 
-        // stream-json format: look for text content in various shapes
-        if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
-            emit_non_empty(output_tx, text);
-        } else if let Some(msg) = value.get("message").and_then(|m| m.as_str()) {
-            emit_non_empty(output_tx, msg);
-        } else if let Some(content) = value.get("content").and_then(|c| c.as_str()) {
-            emit_non_empty(output_tx, content);
-        } else if value.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-            // Same structure as Claude's stream-json
-            if let Some(content) = value
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|c| c.as_array())
-            {
-                for item in content {
-                    if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                            emit_non_empty(output_tx, text);
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") => {
+                // Same structure as Claude's stream-json
+                if let Some(content) = value
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for item in content {
+                        match item.get("type").and_then(|t| t.as_str()) {
+                            Some("text") => {
+                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                    emit_non_empty(output_tx, text);
+                                }
+                            }
+                            Some("tool_use") => {
+                                let tool_id = item
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let tool_name = item
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                let input = item
+                                    .get("input")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null);
+                                let tool = parse_tool_invocation(tool_name, &input);
+                                let _ = output_tx.send(AiOutput::ToolUse { tool_id, tool });
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
+            Some("tool") => {
+                let tool_use_id = value
+                    .get("tool_use_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_error = value
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let content = value
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let _ = output_tx.send(AiOutput::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                });
+            }
+            _ => {
+                // Fallback: try common text fields
+                if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
+                    emit_non_empty(output_tx, text);
+                } else if let Some(msg) = value.get("message").and_then(|m| m.as_str()) {
+                    emit_non_empty(output_tx, msg);
+                } else if let Some(content) = value.get("content").and_then(|c| c.as_str()) {
+                    emit_non_empty(output_tx, content);
+                }
+            }
         }
-        // Silently ignore JSON lines that don't contain displayable text
-        // (status events, tool calls, etc.)
     } else if !line.trim().is_empty() {
         // Plain text fallback
         let _ = output_tx.send(AiOutput::Text(line.to_string()));

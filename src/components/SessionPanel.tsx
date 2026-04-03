@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { LogView } from "./LogView";
 import { StatusBar } from "./StatusBar";
 import { ControlBar } from "./ControlBar";
@@ -9,6 +10,7 @@ interface SessionPanelProps {
 
 export function SessionPanel({ sessionId }: SessionPanelProps) {
   const { session, start, resume, stop, abort, remove } = useSession(sessionId);
+  const [shortenPaths, setShortenPaths] = useState(true);
 
   if (!session) {
     return (
@@ -37,13 +39,15 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
         onAbort={abort}
         onClose={remove}
       />
-      <LogView logs={session.logs} />
+      <LogView logs={session.logs} projectDir={shortenPaths ? session.config.project_dir : undefined} branchName={shortenPaths ? session.config.branch_name : undefined} rateLimitMessage={session.rateLimitMessage} />
       <StatusBar
         status={session.status}
         iterationCount={session.iterationCount}
         lastTag={session.lastTag}
         mode={session.config.mode}
         aiTool={session.config.ai_tool}
+        shortenPaths={shortenPaths}
+        onToggleShortenPaths={() => setShortenPaths((v) => !v)}
       />
     </div>
   );

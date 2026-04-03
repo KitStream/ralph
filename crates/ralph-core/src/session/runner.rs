@@ -3,7 +3,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use crate::discovery::load_prompt;
-use crate::events::{LogCategory, RecoveryAction, RecoveryOption, SessionEvent, SessionEventPayload};
+use crate::events::{
+    AiContentBlock, HousekeepingBlock, LogCategory, RecoveryAction, RecoveryOption, SessionEvent,
+    SessionEventPayload,
+};
 use crate::git::ops::{GitOps, RebaseError};
 use crate::provider::{create_provider, AiOutput, AiProvider};
 use crate::session::state::{SessionConfig, SessionId, SessionStatus, SessionStep};
@@ -31,8 +34,8 @@ pub async fn run_session(
     id: SessionId,
     config: SessionConfig,
     emit: impl Fn(SessionEvent) + Send + Sync + 'static,
-    stop_rx: watch::Receiver<bool>,
-    abort_rx: watch::Receiver<bool>,
+    mut stop_rx: watch::Receiver<bool>,
+    mut abort_rx: watch::Receiver<bool>,
     mut action_rx: mpsc::Receiver<RecoveryAction>,
     resume_ai_session_id: Option<String>,
 ) {
@@ -98,10 +101,16 @@ pub async fn run_session(
             step: SessionStep::Checkout,
             iteration,
         });
+        emit_event(SessionEventPayload::Housekeeping {
+            block: HousekeepingBlock::StepStarted {
+                step: SessionStep::Checkout,
+                description: "Checking out branch".to_string(),
+            },
+        });
         if let Err(e) = git.checkout_branch().await {
             try_git_recovery(&git, &provider, &format!("{}", e), "Checkout", &emit_log, &abort_rx).await;
             if let Err(e2) = git.checkout_branch().await {
-                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Checkout", &emit_log, &abort_rx).await;
+                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Checkout", &emit_log, &emit_event, &abort_rx).await;
                 if let Err(e3) = git.checkout_branch().await {
                     emit_log(LogCategory::Error, format!("Checkout failed after all recovery: {}", e3));
                     continue;
@@ -114,20 +123,25 @@ pub async fn run_session(
             step: SessionStep::RebasePreAi,
             iteration,
         });
-        emit_log(LogCategory::Git, "Fetching and rebasing onto main...".to_string());
+        emit_event(SessionEventPayload::Housekeeping {
+            block: HousekeepingBlock::StepStarted {
+                step: SessionStep::RebasePreAi,
+                description: "Fetching and rebasing onto main".to_string(),
+            },
+        });
 
         if let Err(e) = git.fetch_main().await {
             emit_log(LogCategory::Warning, format!("Fetch failed: {} — attempting recovery", e));
             try_git_recovery(&git, &provider, &format!("{}", e), "Fetch main", &emit_log, &abort_rx).await;
             if let Err(e2) = git.fetch_main().await {
-                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Fetch main", &emit_log, &abort_rx).await;
+                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Fetch main", &emit_log, &emit_event, &abort_rx).await;
                 if let Err(e3) = git.fetch_main().await {
                     emit_log(LogCategory::Warning, format!("Fetch still failing: {}. Proceeding with stale main.", e3));
                 }
             }
         }
 
-        match rebase_with_conflict_resolution(&git, provider.clone(), &emit_log, &abort_rx).await {
+        match rebase_with_conflict_resolution(&git, provider.clone(), &emit_log, &emit_event, &abort_rx).await {
             Ok(_) => {}
             Err(RunError::Permanent(e)) => {
                 emit_log(LogCategory::Error, format!("Pre-AI rebase failed: {}", e));
@@ -197,12 +211,29 @@ pub async fn run_session(
 
                         while let Some(output) = output_rx.recv().await {
                             match output {
-                                AiOutput::Text(text) => emit_log(LogCategory::Ai, text),
+                                AiOutput::Text(text) => {
+                                    emit_event(SessionEventPayload::AiContent {
+                                        block: AiContentBlock::Text { text },
+                                    });
+                                }
+                                AiOutput::ToolUse { tool_id, tool } => {
+                                    emit_event(SessionEventPayload::AiContent {
+                                        block: AiContentBlock::ToolUse { tool_id, tool },
+                                    });
+                                }
+                                AiOutput::ToolResult { tool_use_id, content, is_error } => {
+                                    emit_event(SessionEventPayload::AiContent {
+                                        block: AiContentBlock::ToolResult { tool_use_id, content, is_error },
+                                    });
+                                }
                                 AiOutput::Finished { duration_secs, cost_usd } => {
                                     let cost_str = cost_usd.map(|c| format!(" | cost: ${:.4}", c)).unwrap_or_default();
                                     emit_log(LogCategory::Script, format!("--- Commit agent finished in {:.1}s{} ---", duration_secs, cost_str));
                                 }
                                 AiOutput::Error(e) => emit_log(LogCategory::Error, e),
+                                AiOutput::RateLimited { message } => {
+                                    emit_event(SessionEventPayload::RateLimited { message });
+                                }
                                 AiOutput::SessionId(_) => {} // not used for recovery
                             }
                         }
@@ -321,11 +352,30 @@ pub async fn run_session(
                     .await
             });
 
-            // Forward AI output as log events, capture session ID
+            // Forward AI output as structured events, capture session ID
+            let mut rate_limited = false;
             while let Some(output) = output_rx.recv().await {
                 match output {
                     AiOutput::Text(text) => {
-                        emit_log(LogCategory::Ai, text);
+                        emit_event(SessionEventPayload::AiContent {
+                            block: AiContentBlock::Text { text },
+                        });
+                    }
+                    AiOutput::ToolUse { tool_id, tool } => {
+                        emit_event(SessionEventPayload::AiContent {
+                            block: AiContentBlock::ToolUse { tool_id, tool },
+                        });
+                    }
+                    AiOutput::ToolResult { tool_use_id, content, is_error } => {
+                        emit_event(SessionEventPayload::AiContent {
+                            block: AiContentBlock::ToolResult { tool_use_id, content, is_error },
+                        });
+                    }
+                    AiOutput::RateLimited { message } => {
+                        emit_event(SessionEventPayload::RateLimited {
+                            message: message.clone(),
+                        });
+                        rate_limited = true;
                     }
                     AiOutput::Finished { duration_secs, cost_usd } => {
                         let cost_str = cost_usd
@@ -346,6 +396,32 @@ pub async fn run_session(
                         });
                     }
                 }
+            }
+
+            if rate_limited {
+                // Wait for the AI task to finish, then pause and retry
+                ai_task.await.ok();
+                emit_status(SessionStatus::Running {
+                    step: SessionStep::Paused,
+                    iteration,
+                });
+                // Wait in 60s intervals, checking for abort/stop
+                let pause_interval = std::time::Duration::from_secs(60);
+                loop {
+                    if *abort_rx.borrow() || *stop_rx.borrow() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(pause_interval) => {}
+                        _ = abort_rx.changed() => { continue; }
+                        _ = stop_rx.changed() => { continue; }
+                    }
+                    emit_log(LogCategory::Script, "Rate limit may have reset, retrying...".to_string());
+                    break;
+                }
+                // Undo the iteration increment and retry
+                iteration -= 1;
+                continue;
             }
 
             match ai_task.await {
@@ -401,6 +477,7 @@ pub async fn run_session(
             &config,
             provider.clone(),
             &emit_log,
+            &emit_event,
             &emit_status,
             &abort_rx,
             iteration,
@@ -448,6 +525,7 @@ async fn rebase_with_conflict_resolution(
     git: &GitOps,
     provider: Arc<dyn AiProvider>,
     emit_log: &impl Fn(LogCategory, String),
+    emit_event: &impl Fn(SessionEventPayload),
     abort_rx: &watch::Receiver<bool>,
 ) -> Result<(), RunError> {
     match git.rebase_onto_main().await {
@@ -471,7 +549,7 @@ async fn rebase_with_conflict_resolution(
                 Err(_) => {}
             }
             // Self-heal didn't work — try AI
-            recover_with_ai(git, provider.clone(), &e, emit_log, abort_rx).await;
+            recover_with_ai(git, provider.clone(), &e, emit_log, emit_event, abort_rx).await;
             match git.rebase_onto_main().await {
                 Ok(output) => {
                     if !output.trim().is_empty() {
@@ -527,8 +605,23 @@ async fn rebase_with_conflict_resolution(
                 });
 
                 while let Some(output) = output_rx.recv().await {
-                    if let AiOutput::Text(text) = output {
-                        emit_log(LogCategory::Ai, text);
+                    match output {
+                        AiOutput::Text(text) => {
+                            emit_event(SessionEventPayload::AiContent {
+                                block: AiContentBlock::Text { text },
+                            });
+                        }
+                        AiOutput::ToolUse { tool_id, tool } => {
+                            emit_event(SessionEventPayload::AiContent {
+                                block: AiContentBlock::ToolUse { tool_id, tool },
+                            });
+                        }
+                        AiOutput::ToolResult { tool_use_id, content, is_error } => {
+                            emit_event(SessionEventPayload::AiContent {
+                                block: AiContentBlock::ToolResult { tool_use_id, content, is_error },
+                            });
+                        }
+                        _ => {}
                     }
                 }
 
@@ -579,6 +672,7 @@ async fn recover_with_ai(
     provider: Arc<dyn AiProvider>,
     error_msg: &str,
     emit_log: &impl Fn(LogCategory, String),
+    emit_event: &impl Fn(SessionEventPayload),
     abort_rx: &watch::Receiver<bool>,
 ) -> bool {
     let prompt = format!(
@@ -608,12 +702,29 @@ async fn recover_with_ai(
 
     while let Some(output) = output_rx.recv().await {
         match output {
-            AiOutput::Text(text) => emit_log(LogCategory::Ai, text),
+            AiOutput::Text(text) => {
+                emit_event(SessionEventPayload::AiContent {
+                    block: AiContentBlock::Text { text },
+                });
+            }
+            AiOutput::ToolUse { tool_id, tool } => {
+                emit_event(SessionEventPayload::AiContent {
+                    block: AiContentBlock::ToolUse { tool_id, tool },
+                });
+            }
+            AiOutput::ToolResult { tool_use_id, content, is_error } => {
+                emit_event(SessionEventPayload::AiContent {
+                    block: AiContentBlock::ToolResult { tool_use_id, content, is_error },
+                });
+            }
             AiOutput::Finished { duration_secs, cost_usd } => {
                 let cost_str = cost_usd.map(|c| format!(" | cost: ${:.4}", c)).unwrap_or_default();
                 emit_log(LogCategory::Script, format!("--- Git recovery agent finished in {:.1}s{} ---", duration_secs, cost_str));
             }
             AiOutput::Error(e) => emit_log(LogCategory::Error, e),
+            AiOutput::RateLimited { message } => {
+                emit_event(SessionEventPayload::RateLimited { message });
+            }
             AiOutput::SessionId(_) => {}
         }
     }
@@ -659,13 +770,14 @@ async fn try_git_recovery_ai(
     error_msg: &str,
     op_name: &str,
     emit_log: &impl Fn(LogCategory, String),
+    emit_event: &impl Fn(SessionEventPayload),
     abort_rx: &watch::Receiver<bool>,
 ) -> bool {
     emit_log(
         LogCategory::Warning,
         format!("{} still failing after self-heal: {} — invoking AI recovery agent", op_name, error_msg),
     );
-    recover_with_ai(git, provider.clone(), error_msg, emit_log, abort_rx).await
+    recover_with_ai(git, provider.clone(), error_msg, emit_log, emit_event, abort_rx).await
 }
 
 async fn git_housekeeping(
@@ -673,52 +785,71 @@ async fn git_housekeeping(
     config: &SessionConfig,
     provider: Arc<dyn AiProvider>,
     emit_log: &impl Fn(LogCategory, String),
+    emit_event: &impl Fn(SessionEventPayload),
     emit_status: &impl Fn(SessionStatus),
     abort_rx: &watch::Receiver<bool>,
     iteration: u32,
 ) -> anyhow::Result<Option<String>> {
+    let emit_hk = |block: HousekeepingBlock| {
+        emit_event(SessionEventPayload::Housekeeping { block });
+    };
+
     // Step c: Push branch (with recovery)
     emit_status(SessionStatus::Running {
         step: SessionStep::PushBranch,
         iteration,
     });
-    emit_log(LogCategory::Git, "Pushing branch to origin...".to_string());
+    emit_hk(HousekeepingBlock::StepStarted {
+        step: SessionStep::PushBranch,
+        description: "Pushing branch to origin".to_string(),
+    });
     if let Err(e) = git.push_branch().await {
         try_git_recovery(git, &provider, &format!("{}", e), "Push branch", emit_log, abort_rx).await;
         if let Err(e2) = git.push_branch().await {
-            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push branch", emit_log, abort_rx).await;
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push branch", emit_log, emit_event, abort_rx).await;
             if let Err(e3) = git.push_branch().await {
                 return Err(e3);
             }
         }
     }
+    emit_hk(HousekeepingBlock::StepCompleted {
+        step: SessionStep::PushBranch,
+        summary: "Branch pushed".to_string(),
+    });
 
     // Step d: Rebase onto main again (with recovery)
     emit_status(SessionStatus::Running {
         step: SessionStep::RebasePostAi,
         iteration,
     });
+    emit_hk(HousekeepingBlock::StepStarted {
+        step: SessionStep::RebasePostAi,
+        description: "Rebasing onto main".to_string(),
+    });
     if let Err(e) = git.fetch_main().await {
         emit_log(LogCategory::Warning, format!("Fetch failed: {} — attempting recovery", e));
         try_git_recovery(git, &provider, &format!("{}", e), "Fetch main", emit_log, abort_rx).await;
         if let Err(e2) = git.fetch_main().await {
-            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Fetch main", emit_log, abort_rx).await;
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Fetch main", emit_log, emit_event, abort_rx).await;
             if let Err(e3) = git.fetch_main().await {
                 emit_log(LogCategory::Warning, format!("Fetch still failing: {}. Proceeding with stale main.", e3));
             }
         }
     }
-    if let Err(e) = rebase_with_conflict_resolution(git, provider.clone(), emit_log, abort_rx).await {
+    if let Err(e) = rebase_with_conflict_resolution(git, provider.clone(), emit_log, emit_event, abort_rx).await {
         // Clean up rebase/merge state so the next iteration doesn't get stuck
         heal_git_state(git, emit_log).await;
         return Err(anyhow::anyhow!("{}", e));
     }
+    emit_hk(HousekeepingBlock::StepCompleted {
+        step: SessionStep::RebasePostAi,
+        summary: "Rebased onto main".to_string(),
+    });
 
     // Log diff stat
     if let Ok(diff_stat) = git.diff_stat_against_main().await {
         if !diff_stat.trim().is_empty() {
-            emit_log(LogCategory::Script, format!("--- Files pushed to {} ---", config.main_branch));
-            emit_log(LogCategory::Git, diff_stat);
+            emit_hk(HousekeepingBlock::DiffStat { stat: diff_stat });
         }
     }
 
@@ -727,16 +858,23 @@ async fn git_housekeeping(
         step: SessionStep::PushToMain,
         iteration,
     });
-    emit_log(LogCategory::Git, "Pushing to main...".to_string());
+    emit_hk(HousekeepingBlock::StepStarted {
+        step: SessionStep::PushToMain,
+        description: "Pushing to main".to_string(),
+    });
     if let Err(e) = git.push_to_main().await {
         try_git_recovery(git, &provider, &format!("{}", e), "Push to main", emit_log, abort_rx).await;
         if let Err(e2) = git.push_to_main().await {
-            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push to main", emit_log, abort_rx).await;
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push to main", emit_log, emit_event, abort_rx).await;
             if let Err(e3) = git.push_to_main().await {
                 return Err(e3);
             }
         }
     }
+    emit_hk(HousekeepingBlock::StepCompleted {
+        step: SessionStep::PushToMain,
+        summary: "Pushed to main".to_string(),
+    });
 
     // Steps f+g: Tag and push
     let mut tag = None;
@@ -745,10 +883,16 @@ async fn git_housekeeping(
             step: SessionStep::Tagging,
             iteration,
         });
-        emit_log(LogCategory::Git, "Creating and pushing tag...".to_string());
+        emit_hk(HousekeepingBlock::StepStarted {
+            step: SessionStep::Tagging,
+            description: "Creating and pushing tag".to_string(),
+        });
         match git.tag_and_push().await {
             Ok(new_tag) => {
-                emit_log(LogCategory::Git, format!("Tagged {}", new_tag));
+                emit_hk(HousekeepingBlock::StepCompleted {
+                    step: SessionStep::Tagging,
+                    summary: format!("Tagged {}", new_tag),
+                });
                 tag = Some(new_tag);
             }
             Err(e) => {

@@ -5,7 +5,10 @@ use clap::Parser;
 use colored::Colorize;
 
 use ralph_core::discovery::discover_modes;
-use ralph_core::events::{LogCategory, RecoveryAction, SessionEvent, SessionEventPayload};
+use ralph_core::events::{
+    AiContentBlock, HousekeepingBlock, LogCategory, RecoveryAction, SessionEvent,
+    SessionEventPayload, ToolInvocation,
+};
 use ralph_core::provider::AiTool;
 use ralph_core::session::runner::run_session;
 use ralph_core::session::state::{SessionConfig, SessionId};
@@ -170,8 +173,13 @@ fn print_event(event: &SessionEvent) {
             };
             println!("{}", colored_text);
         }
+        SessionEventPayload::AiContent { block } => {
+            print_ai_content(block);
+        }
+        SessionEventPayload::Housekeeping { block } => {
+            print_housekeeping(block);
+        }
         SessionEventPayload::StatusChanged { status } => {
-            // Status changes are shown via log messages, no extra output needed
             let _ = status;
         }
         SessionEventPayload::IterationComplete { iteration, tag } => {
@@ -185,10 +193,110 @@ fn print_event(event: &SessionEvent) {
         SessionEventPayload::Finished { reason } => {
             println!("{}", format!("Session finished: {}", reason).magenta());
         }
+        SessionEventPayload::RateLimited { message } => {
+            eprintln!("{}", format!("⏸ Rate limited: {}", message).yellow().bold());
+            eprintln!("{}", "  Waiting for limit to reset...".yellow());
+        }
         SessionEventPayload::ActionRequired { error, .. } => {
             eprintln!("{}", format!("Recovery needed: {}", error).yellow().bold());
         }
         SessionEventPayload::AiSessionIdChanged { .. } => {}
+    }
+}
+
+fn print_ai_content(block: &AiContentBlock) {
+    match block {
+        AiContentBlock::Text { text } => {
+            println!("{}", text.green());
+        }
+        AiContentBlock::ToolUse { tool, .. } => {
+            match tool {
+                ToolInvocation::Read { file_path } => {
+                    println!("  {} {}", "Read".blue().bold(), file_path.white());
+                }
+                ToolInvocation::Edit { file_path, old_string, new_string } => {
+                    println!("  {} {}", "Edit".yellow().bold(), file_path.white());
+                    for line in old_string.lines() {
+                        println!("    {}{}", "- ".red(), line.red());
+                    }
+                    for line in new_string.lines() {
+                        println!("    {}{}", "+ ".green(), line.green());
+                    }
+                }
+                ToolInvocation::Write { file_path, .. } => {
+                    println!("  {} {}", "Write".yellow().bold(), file_path.white());
+                }
+                ToolInvocation::Bash { command, description } => {
+                    println!("  {} {}", "$".cyan().bold(), command.white());
+                    if let Some(desc) = description {
+                        println!("    {}", desc.dimmed());
+                    }
+                }
+                ToolInvocation::Glob { pattern, path } => {
+                    let suffix = path.as_deref().map(|p| format!(" in {}", p)).unwrap_or_default();
+                    println!("  {} {}{}", "Glob".blue().bold(), pattern.white(), suffix.dimmed());
+                }
+                ToolInvocation::Grep { pattern, path, .. } => {
+                    let suffix = path.as_deref().map(|p| format!(" in {}", p)).unwrap_or_default();
+                    println!("  {} {}{}", "Grep".blue().bold(), pattern.white(), suffix.dimmed());
+                }
+                ToolInvocation::Other { name, .. } => {
+                    println!("  {} {}", "Tool".blue().bold(), name.white());
+                }
+            }
+        }
+        AiContentBlock::ToolResult { content, is_error, .. } => {
+            let max_lines = 10;
+            let total_lines = content.lines().count();
+            for line in content.lines().take(max_lines) {
+                if *is_error {
+                    println!("    {}", line.red());
+                } else {
+                    println!("    {}", line.dimmed());
+                }
+            }
+            if total_lines > max_lines {
+                println!("    {}", format!("... ({} more lines)", total_lines - max_lines).dimmed());
+            }
+        }
+    }
+}
+
+fn print_housekeeping(block: &HousekeepingBlock) {
+    match block {
+        HousekeepingBlock::StepStarted { step, description } => {
+            println!("{}", format!("▸ [{}] {}", step_label(step), description).cyan());
+        }
+        HousekeepingBlock::StepCompleted { step, summary } => {
+            println!("{}", format!("✓ [{}] {}", step_label(step), summary).cyan());
+        }
+        HousekeepingBlock::GitCommand { output, .. } => {
+            if !output.trim().is_empty() {
+                println!("{}", output.cyan());
+            }
+        }
+        HousekeepingBlock::DiffStat { stat } => {
+            println!("{}", stat.cyan());
+        }
+        HousekeepingBlock::Recovery { action, detail } => {
+            println!("{}", format!("↻ {}: {}", action, detail).yellow());
+        }
+    }
+}
+
+fn step_label(step: &ralph_core::session::state::SessionStep) -> &'static str {
+    use ralph_core::session::state::SessionStep;
+    match step {
+        SessionStep::Idle => "idle",
+        SessionStep::Checkout => "checkout",
+        SessionStep::RebasePreAi => "rebase",
+        SessionStep::RunningAi => "ai",
+        SessionStep::PushBranch => "push",
+        SessionStep::RebasePostAi => "rebase",
+        SessionStep::PushToMain => "push-main",
+        SessionStep::Tagging => "tag",
+        SessionStep::RecoveringGit => "recovery",
+        SessionStep::Paused => "paused",
     }
 }
 

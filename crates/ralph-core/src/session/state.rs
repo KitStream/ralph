@@ -43,6 +43,7 @@ pub enum SessionStep {
     PushToMain,
     Tagging,
     RecoveringGit,
+    Paused,
 }
 
 impl std::fmt::Display for SessionStep {
@@ -57,6 +58,7 @@ impl std::fmt::Display for SessionStep {
             SessionStep::PushToMain => write!(f, "Pushing to main"),
             SessionStep::Tagging => write!(f, "Tagging"),
             SessionStep::RecoveringGit => write!(f, "Recovering git state"),
+            SessionStep::Paused => write!(f, "Paused (rate limited)"),
         }
     }
 }
