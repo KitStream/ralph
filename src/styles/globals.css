@@ -31,23 +31,23 @@
 }
 
 [data-theme="light"] {
-  --bg-primary: #f0f1f3;
-  --bg-secondary: #e4e6ea;
-  --bg-tertiary: #d4d7dc;
-  --bg-selected: #c8dff5;
-  --text-primary: #1f2328;
-  --text-secondary: #4d566a;
-  --text-muted: #6e7781;
-  --border-primary: #bcc3cc;
-  --border-hover: #a0a8b4;
+  --bg-primary: #e2e4e8;
+  --bg-secondary: #d6d9de;
+  --bg-tertiary: #c8ccd2;
+  --bg-selected: #b8d4f0;
+  --text-primary: #1a1e24;
+  --text-secondary: #3d4555;
+  --text-muted: #5c6370;
+  --border-primary: #adb4be;
+  --border-hover: #939ba8;
   --accent-blue: #0969da;
   --accent-green: #1a7f37;
   --accent-red: #cf222e;
   --accent-yellow: #9a6700;
   --overlay-bg: rgba(0, 0, 0, 0.3);
-  --scrollbar-track: #e4e6ea;
-  --scrollbar-thumb: #bcc3cc;
-  --scrollbar-thumb-hover: #a0a8b4;
+  --scrollbar-track: #d6d9de;
+  --scrollbar-thumb: #adb4be;
+  --scrollbar-thumb-hover: #939ba8;
   --log-git: #0550ae;
   --log-ai: #1a7f37;
   --log-script: #8250df;
@@ -57,8 +57,8 @@
   --status-running: #1a7f37;
   --status-stopping: #9a6700;
   --status-failed: #cf222e;
-  --badge-bg: #d4d7dc;
-  --grid-gap: #bcc3cc;
+  --badge-bg: #c8ccd2;
+  --grid-gap: #adb4be;
 }
 
 * {

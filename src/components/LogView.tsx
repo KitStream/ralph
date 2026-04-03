@@ -73,7 +73,7 @@ export function LogView({
   rateLimitMessage,
 }: LogViewProps) {
   const worktreePrefix = projectDir && branchName
-    ? `${projectDir}/.ralph/${branchName}-worktree`
+    ? `${projectDir.replace(/\\/g, "/")}/.ralph/${branchName}-worktree`
     : undefined;
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -253,15 +253,33 @@ function IterationHeader({
 }
 
 function shortenPath(path: string, worktreePrefix?: string): string {
-  if (worktreePrefix && path.startsWith(worktreePrefix)) {
-    return "⌂" + path.slice(worktreePrefix.length);
+  if (!worktreePrefix) return path;
+  const normPath = path.replace(/\\/g, "/").toLowerCase();
+  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
+  if (normPath.startsWith(normPrefix)) {
+    return "⌂" + path.slice(normPrefix.length);
   }
   return path;
 }
 
+/** Replace all occurrences of the worktree prefix in arbitrary text (e.g. bash commands). */
 function shortenText(text: string, worktreePrefix?: string): string {
   if (!worktreePrefix) return text;
-  return text.split(worktreePrefix).join("⌂");
+  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
+  // Walk through text case-insensitively, matching both slash directions
+  let result = "";
+  let i = 0;
+  const normText = text.replace(/\\/g, "/").toLowerCase();
+  while (i < text.length) {
+    if (normText.startsWith(normPrefix, i)) {
+      result += "⌂";
+      i += normPrefix.length;
+    } else {
+      result += text[i];
+      i++;
+    }
+  }
+  return result;
 }
 
 function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = true }: { log: LogEntry; worktreePrefix?: string; toolOutputPreviewLines?: number; showToolOutput?: boolean }) {
@@ -347,30 +365,30 @@ function renderToolHeader(tool: ToolInvocation, color: string, worktreePrefix?: 
 
   switch (tool.tool) {
     case "Read":
-      return <div>{badge("Read")}<span style={{ color: "#e2e8f0" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Read")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
     case "Edit":
-      return <div>{badge("Edit")}<span style={{ color: "#e2e8f0" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Edit")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
     case "Write":
-      return <div>{badge("Write")}<span style={{ color: "#e2e8f0" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Write")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
     case "Bash":
       return (
         <div>
           {badge("$")}
-          <span style={{ color: "#e2e8f0" }}>{shortenText(tool.command, worktreePrefix)}</span>
-          {tool.description && <span style={{ color: "#94a3b8", marginLeft: 8, fontSize: "12px" }}>{tool.description}</span>}
+          <span style={{ color: "var(--text-primary)" }}>{shortenText(tool.command, worktreePrefix)}</span>
+          {tool.description && <span style={{ color: "var(--text-muted)", marginLeft: 8, fontSize: "12px" }}>{tool.description}</span>}
         </div>
       );
     case "Glob":
-      return <div>{badge("Glob")}<span style={{ color: "#e2e8f0" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "#94a3b8" }}> in {fp(tool.path)}</span>}</div>;
+      return <div>{badge("Glob")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {fp(tool.path)}</span>}</div>;
     case "Grep":
-      return <div>{badge("Grep")}<span style={{ color: "#e2e8f0" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "#94a3b8" }}> in {fp(tool.path)}</span>}</div>;
+      return <div>{badge("Grep")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {fp(tool.path)}</span>}</div>;
     case "Other": {
       // Show a compact summary of the input arguments
       const summary = Object.entries(tool.input)
         .filter(([, v]) => typeof v === "string" || typeof v === "number")
         .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
         .join(", ");
-      return <div>{badge(tool.name)}{summary && <span style={{ color: "#94a3b8" }}> {summary}</span>}</div>;
+      return <div>{badge(tool.name)}{summary && <span style={{ color: "var(--text-muted)" }}> {summary}</span>}</div>;
     }
   }
 }
@@ -380,13 +398,13 @@ function renderToolDetail(tool: ToolInvocation) {
     return (
       <div style={{ marginTop: 4, fontSize: "12px" }}>
         {tool.old_string.split("\n").map((line, i) => (
-          <div key={`old-${i}`} style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#fca5a5", whiteSpace: "pre" }}>
-            <span style={{ userSelect: "none", color: "#ef4444" }}>- </span>{line}
+          <div key={`old-${i}`} style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "var(--text-primary)", whiteSpace: "pre" }}>
+            <span style={{ userSelect: "none", color: "var(--accent-red)" }}>- </span>{line}
           </div>
         ))}
         {tool.new_string.split("\n").map((line, i) => (
-          <div key={`new-${i}`} style={{ backgroundColor: "rgba(34,197,94,0.15)", color: "#86efac", whiteSpace: "pre" }}>
-            <span style={{ userSelect: "none", color: "#22c55e" }}>+ </span>{line}
+          <div key={`new-${i}`} style={{ backgroundColor: "rgba(34,197,94,0.15)", color: "var(--text-primary)", whiteSpace: "pre" }}>
+            <span style={{ userSelect: "none", color: "var(--accent-green)" }}>+ </span>{line}
           </div>
         ))}
       </div>
@@ -409,7 +427,7 @@ function ToolResultBlock({ content, isError, previewLines = 2 }: { content: stri
     <div
       style={{
         paddingLeft: 10,
-        color: isError ? "var(--log-error)" : "#94a3b8",
+        color: isError ? "var(--log-error)" : "var(--text-muted)",
         fontSize: "12px",
         cursor: isLong ? "pointer" : undefined,
       }}
@@ -418,21 +436,21 @@ function ToolResultBlock({ content, isError, previewLines = 2 }: { content: stri
       {displayLines.map((line, i) => {
         if (isDiff) {
           if (line.startsWith("+")) {
-            return <div key={i} style={{ backgroundColor: "rgba(34,197,94,0.15)", color: "#86efac", whiteSpace: "pre" }}>{line}</div>;
+            return <div key={i} style={{ backgroundColor: "rgba(34,197,94,0.15)", color: "var(--accent-green)", whiteSpace: "pre" }}>{line}</div>;
           }
           if (line.startsWith("-")) {
-            return <div key={i} style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#fca5a5", whiteSpace: "pre" }}>{line}</div>;
+            return <div key={i} style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "var(--accent-red)", whiteSpace: "pre" }}>{line}</div>;
           }
         }
         return <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{line}</div>;
       })}
       {isLong && !expanded && (
-        <div style={{ color: "#64748b", fontStyle: "italic" }}>
+        <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
           ... {lines.length - previewLines} more lines (click to expand)
         </div>
       )}
       {isLong && expanded && (
-        <div style={{ color: "#64748b", fontStyle: "italic" }}>
+        <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
           (click to collapse)
         </div>
       )}
@@ -452,7 +470,7 @@ function HousekeepingRow({ block }: { block: HousekeepingBlock }) {
       );
     case "StepCompleted":
       return (
-        <div style={{ color: "#4ade80", display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ color: "var(--accent-green)", display: "flex", alignItems: "center", gap: 6 }}>
           <span>✓</span>
           <StepBadge step={block.step} />
           <span>{block.summary}</span>
