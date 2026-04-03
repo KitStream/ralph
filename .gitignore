@@ -33,6 +33,9 @@ Thumbs.db
 # Ralph runtime
 .ralph/
 
+# Claude Code
+.claude/worktrees/
+
 # Environment
 .env
 ralph.env
