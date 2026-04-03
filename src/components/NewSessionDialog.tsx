@@ -51,7 +51,7 @@ export function NewSessionDialog({
     if (projectDir) {
       discover(projectDir);
     }
-  }, [projectDir, discover]);
+  }, [projectDir, isOpen, discover]);
 
   useEffect(() => {
     if (modes.length > 0 && !selectedMode) {

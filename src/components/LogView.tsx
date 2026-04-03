@@ -141,8 +141,11 @@ export function LogView({ logs, projectDir, branchName, rateLimitMessage }: LogV
 }
 
 function shortenPath(path: string, worktreePrefix?: string): string {
-  if (worktreePrefix && path.startsWith(worktreePrefix)) {
-    return "⌂" + path.slice(worktreePrefix.length);
+  if (!worktreePrefix) return path;
+  const normPath = path.replace(/\\/g, "/").toLowerCase();
+  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
+  if (normPath.startsWith(normPrefix)) {
+    return "⌂" + path.slice(normPrefix.length);
   }
   return path;
 }
