@@ -32,7 +32,8 @@ type Action =
   | { type: "SET_ACTIVE"; id: string | null }
   | { type: "SESSION_EVENT"; event: SessionEvent }
   | { type: "SET_SETTINGS"; settings: AppSettings }
-  | { type: "MARK_STOPPING"; id: string };
+  | { type: "MARK_STOPPING"; id: string }
+  | { type: "CANCEL_STOPPING"; id: string };
 
 let logIdCounter = 0;
 
@@ -91,6 +92,25 @@ function reducer(state: AppState, action: Action): AppState {
       const updated: SessionState = {
         ...session,
         status: { Stopping: { step, iteration } },
+      };
+      const sessions = new Map(state.sessions);
+      sessions.set(action.id, updated);
+      return { ...state, sessions };
+    }
+
+    case "CANCEL_STOPPING": {
+      const session = state.sessions.get(action.id);
+      if (!session) return state;
+      // Revert Stopping back to Running
+      let step: import("../lib/types").SessionStep = "Idle";
+      let iteration = session.iterationCount || 0;
+      if (typeof session.status === "object" && "Stopping" in session.status) {
+        step = session.status.Stopping.step;
+        iteration = session.status.Stopping.iteration;
+      }
+      const updated: SessionState = {
+        ...session,
+        status: { Running: { step, iteration } },
       };
       const sessions = new Map(state.sessions);
       sessions.set(action.id, updated);
@@ -210,6 +230,7 @@ interface SessionsContextType {
   startSession: (id: string) => Promise<void>;
   resumeSession: (id: string) => Promise<void>;
   stopSession: (id: string) => Promise<void>;
+  cancelStopSession: (id: string) => Promise<void>;
   abortSession: (id: string) => Promise<void>;
   removeSession: (id: string) => Promise<void>;
   setActiveSession: (id: string | null) => void;
@@ -338,6 +359,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     await commands.stopSession(id);
   }, []);
 
+  const cancelStopSessionFn = useCallback(async (id: string) => {
+    dispatch({ type: "CANCEL_STOPPING", id });
+    await commands.cancelStopSession(id);
+  }, []);
+
   const abortSessionFn = useCallback(async (id: string) => {
     await commands.abortSession(id);
   }, []);
@@ -365,6 +391,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         startSession: startSessionFn,
         resumeSession: resumeSessionFn,
         stopSession: stopSessionFn,
+        cancelStopSession: cancelStopSessionFn,
         abortSession: abortSessionFn,
         removeSession: removeSessionFn,
         setActiveSession: setActiveSessionFn,

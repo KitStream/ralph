@@ -9,7 +9,7 @@ interface SessionPanelProps {
 }
 
 export function SessionPanel({ sessionId }: SessionPanelProps) {
-  const { session, start, resume, stop, abort, remove } = useSession(sessionId);
+  const { session, start, resume, stop, cancelStop, abort, remove } = useSession(sessionId);
   const [shortenPaths, setShortenPaths] = useState(true);
 
   if (!session) {
@@ -36,6 +36,7 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
         onStart={start}
         onResume={resume}
         onStop={stop}
+        onCancelStop={cancelStop}
         onAbort={abort}
         onClose={remove}
       />

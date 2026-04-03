@@ -84,6 +84,9 @@ export function SessionList({
             <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
               {session.config.mode}
             </span>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              {session.config.ai_tool}
+            </span>
             {session.iterationCount > 0 && (
               <span
                 style={{

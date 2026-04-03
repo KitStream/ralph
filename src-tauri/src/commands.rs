@@ -122,6 +122,18 @@ pub async fn stop_session(
 }
 
 #[tauri::command]
+pub async fn cancel_stop_session(
+    manager: State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    let id = parse_session_id(&session_id)?;
+    manager
+        .cancel_stop_session(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn abort_session(
     manager: State<'_, Arc<SessionManager>>,
     session_id: String,

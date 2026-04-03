@@ -5,6 +5,7 @@ interface ControlBarProps {
   onStart: () => void;
   onResume: () => void;
   onStop: () => void;
+  onCancelStop: () => void;
   onAbort: () => void;
   onClose: () => void;
 }
@@ -26,6 +27,7 @@ export function ControlBar({
   onStart,
   onResume,
   onStop,
+  onCancelStop,
   onAbort,
   onClose,
 }: ControlBarProps) {
@@ -84,9 +86,14 @@ export function ControlBar({
         </button>
       )}
       {stopping && (
-        <span style={{ color: "var(--status-stopping)", fontSize: "12px" }}>
-          Stopping after current iteration...
-        </span>
+        <>
+          <button onClick={onCancelStop} style={btnStyle("var(--bg-tertiary)")} title="Cancel the stop request and keep running">
+            Cancel Stop
+          </button>
+          <span style={{ color: "var(--status-stopping)", fontSize: "12px" }}>
+            Stopping after current iteration...
+          </span>
+        </>
       )}
       {aborted && (
         <span style={{ color: "#f97316", fontSize: "12px" }}>

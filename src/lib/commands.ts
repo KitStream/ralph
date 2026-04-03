@@ -39,6 +39,10 @@ export async function stopSession(sessionId: string): Promise<void> {
   return invoke("stop_session", { sessionId });
 }
 
+export async function cancelStopSession(sessionId: string): Promise<void> {
+  return invoke("cancel_stop_session", { sessionId });
+}
+
 export async function abortSession(sessionId: string): Promise<void> {
   return invoke("abort_session", { sessionId });
 }

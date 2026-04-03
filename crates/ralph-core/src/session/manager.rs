@@ -207,6 +207,15 @@ impl SessionManager {
         Ok(())
     }
 
+    pub async fn cancel_stop_session(&self, id: &SessionId) -> anyhow::Result<()> {
+        let sessions = self.sessions.read().await;
+        let handle = sessions
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+        handle.stop_tx.send(false).ok();
+        Ok(())
+    }
+
     pub async fn abort_session(&self, id: &SessionId) -> anyhow::Result<()> {
         {
             let sessions = self.sessions.read().await;

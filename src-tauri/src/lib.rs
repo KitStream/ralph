@@ -16,6 +16,7 @@ pub fn run() {
             commands::create_session,
             commands::start_session,
             commands::stop_session,
+            commands::cancel_stop_session,
             commands::abort_session,
             commands::remove_session,
             commands::list_sessions,
