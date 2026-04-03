@@ -104,22 +104,19 @@ pub async fn run_session(
 
         iteration += 1;
 
-        // Step 0: Clean up any leftover rebase state, then checkout
+        // Step 0: Checkout branch (with full recovery pipeline)
         emit_status(SessionStatus::Running {
             step: SessionStep::Checkout,
             iteration,
         });
-        if git.has_active_rebase() {
-            emit_log(LogCategory::Warning, "Found leftover rebase state — aborting it.".to_string());
-            git.abort_rebase().await.ok();
-        }
-        // Reset any unmerged index state so checkout can succeed
         if let Err(e) = git.checkout_branch().await {
-            emit_log(LogCategory::Warning, format!("Checkout failed: {} — resetting worktree", e));
-            git.run_in_worktree(&["reset", "--hard"]).await.ok();
+            try_git_recovery(&git, &provider, &format!("{}", e), "Checkout", &emit_log, &abort_rx).await;
             if let Err(e2) = git.checkout_branch().await {
-                emit_log(LogCategory::Error, format!("Checkout still failed after reset: {}", e2));
-                continue;
+                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Checkout", &emit_log, &abort_rx).await;
+                if let Err(e3) = git.checkout_branch().await {
+                    emit_log(LogCategory::Error, format!("Checkout failed after all recovery: {}", e3));
+                    continue;
+                }
             }
         }
 
@@ -136,7 +133,14 @@ pub async fn run_session(
         emit_log(LogCategory::Git, "Fetching and rebasing onto main...".to_string());
 
         if let Err(e) = git.fetch_main().await {
-            emit_log(LogCategory::Warning, format!("Fetch failed: {}", e));
+            emit_log(LogCategory::Warning, format!("Fetch failed: {} — attempting recovery", e));
+            try_git_recovery(&git, &provider, &format!("{}", e), "Fetch main", &emit_log, &abort_rx).await;
+            if let Err(e2) = git.fetch_main().await {
+                try_git_recovery_ai(&git, &provider, &format!("{}", e2), "Fetch main", &emit_log, &abort_rx).await;
+                if let Err(e3) = git.fetch_main().await {
+                    emit_log(LogCategory::Warning, format!("Fetch still failing: {}. Proceeding with stale main.", e3));
+                }
+            }
         }
 
         match rebase_with_conflict_resolution(&git, provider.clone(), &emit_log, &abort_rx).await {
@@ -464,7 +468,39 @@ async fn rebase_with_conflict_resolution(
             Ok(())
         }
         Err(RebaseError::Permanent(e)) => {
-            Err(RunError::Permanent(e))
+            // Try self-heal then AI before giving up
+            emit_log(LogCategory::Warning, format!("Rebase failed (permanent): {} — attempting recovery", e));
+            heal_git_state(git, emit_log).await;
+            match git.rebase_onto_main().await {
+                Ok(output) => {
+                    if !output.trim().is_empty() {
+                        emit_log(LogCategory::Git, output);
+                    }
+                    return Ok(());
+                }
+                Err(_) => {}
+            }
+            // Self-heal didn't work — try AI
+            recover_with_ai(git, provider.clone(), &e, emit_log, abort_rx).await;
+            match git.rebase_onto_main().await {
+                Ok(output) => {
+                    if !output.trim().is_empty() {
+                        emit_log(LogCategory::Git, output);
+                    }
+                    return Ok(());
+                }
+                Err(RebaseError::Conflict(c)) => {
+                    // AI fixed the permanent issue but now we have conflicts — handle them
+                    emit_log(LogCategory::Git, format!("Rebase conflict after recovery: {}", c));
+                    // Fall through to conflict handling below
+                    // (we can't easily do this with match arms, so abort and return)
+                    git.abort_rebase().await.ok();
+                    return Err(RunError::Transient(format!("Rebase conflict after recovery: {}", c)));
+                }
+                Err(RebaseError::Permanent(e2)) => {
+                    return Err(RunError::Permanent(e2));
+                }
+            }
         }
         Err(RebaseError::Conflict(error_output)) => {
             emit_log(LogCategory::Git, format!("Rebase conflict: {}", error_output));
@@ -535,6 +571,113 @@ async fn rebase_with_conflict_resolution(
     }
 }
 
+/// Quick self-healing for common git state problems.
+/// Removes stale lock files, aborts lingering rebases, and resets dirty index.
+async fn heal_git_state(git: &GitOps, emit_log: &impl Fn(LogCategory, String)) {
+    git.remove_stale_lock_files(emit_log).await;
+    if git.has_active_rebase() {
+        emit_log(LogCategory::Warning, "Aborting leftover rebase...".to_string());
+        git.abort_rebase().await.ok();
+    }
+    git.run_in_worktree(&["reset", "--hard"]).await.ok();
+}
+
+/// Invoke the AI agent to diagnose and fix a git error.
+/// Returns `true` if the agent ran successfully (the error may or may not be fixed).
+async fn recover_with_ai(
+    git: &GitOps,
+    provider: Arc<dyn AiProvider>,
+    error_msg: &str,
+    emit_log: &impl Fn(LogCategory, String),
+    abort_rx: &watch::Receiver<bool>,
+) -> bool {
+    let prompt = format!(
+        "A git operation in this repository failed with the following error:\n\n\
+         {}\n\n\
+         The working directory is: {}\n\n\
+         Diagnose the issue and fix it. Common problems include:\n\
+         - Stale lock files (index.lock, HEAD.lock) — remove them\n\
+         - Unmerged files — resolve conflicts, stage, and complete the operation\n\
+         - Dirty worktree — commit or stash changes as appropriate\n\
+         - Detached HEAD — checkout the correct branch\n\n\
+         After fixing, make sure `git status` shows a clean state and the branch can be checked out.",
+        error_msg,
+        git.worktree_dir.display(),
+    );
+
+    let (output_tx, mut output_rx) = mpsc::unbounded_channel();
+    let abort_clone = abort_rx.clone();
+    let working_dir = git.worktree_dir.clone();
+    let provider_clone = provider.clone();
+
+    let task = tokio::spawn(async move {
+        provider_clone
+            .run(&working_dir, &prompt, None, output_tx, abort_clone)
+            .await
+    });
+
+    while let Some(output) = output_rx.recv().await {
+        match output {
+            AiOutput::Text(text) => emit_log(LogCategory::Ai, text),
+            AiOutput::Finished { duration_secs, cost_usd } => {
+                let cost_str = cost_usd.map(|c| format!(" | cost: ${:.4}", c)).unwrap_or_default();
+                emit_log(LogCategory::Script, format!("--- Git recovery agent finished in {:.1}s{} ---", duration_secs, cost_str));
+            }
+            AiOutput::Error(e) => emit_log(LogCategory::Error, e),
+            AiOutput::SessionId(_) => {}
+        }
+    }
+
+    match task.await {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            emit_log(LogCategory::Error, format!("Git recovery agent failed: {}", e));
+            false
+        }
+        Err(e) => {
+            emit_log(LogCategory::Error, format!("Git recovery agent panicked: {}", e));
+            false
+        }
+    }
+}
+
+/// Full recovery pipeline: heal known issues, then AI agent fallback.
+/// Returns `true` if recovery was attempted (caller should retry the operation).
+async fn try_git_recovery(
+    git: &GitOps,
+    _provider: &Arc<dyn AiProvider>,
+    error_msg: &str,
+    op_name: &str,
+    emit_log: &impl Fn(LogCategory, String),
+    _abort_rx: &watch::Receiver<bool>,
+) -> bool {
+    emit_log(
+        LogCategory::Warning,
+        format!("{} failed: {} — attempting self-heal", op_name, error_msg),
+    );
+    heal_git_state(git, emit_log).await;
+
+    // Caller will retry after this. If that also fails, caller should call
+    // try_git_recovery_ai for the AI fallback.
+    true
+}
+
+/// AI agent fallback after self-heal didn't work.
+async fn try_git_recovery_ai(
+    git: &GitOps,
+    provider: &Arc<dyn AiProvider>,
+    error_msg: &str,
+    op_name: &str,
+    emit_log: &impl Fn(LogCategory, String),
+    abort_rx: &watch::Receiver<bool>,
+) -> bool {
+    emit_log(
+        LogCategory::Warning,
+        format!("{} still failing after self-heal: {} — invoking AI recovery agent", op_name, error_msg),
+    );
+    recover_with_ai(git, provider.clone(), error_msg, emit_log, abort_rx).await
+}
+
 async fn git_housekeeping(
     git: &GitOps,
     config: &SessionConfig,
@@ -544,35 +687,40 @@ async fn git_housekeeping(
     abort_rx: &watch::Receiver<bool>,
     iteration: u32,
 ) -> anyhow::Result<Option<String>> {
-    // Step c: Push branch
+    // Step c: Push branch (with recovery)
     emit_status(SessionStatus::Running {
         step: SessionStep::PushBranch,
         iteration,
     });
     emit_log(LogCategory::Git, "Pushing branch to origin...".to_string());
-    match git.push_branch().await {
-        Ok(output) => {
-            if !output.trim().is_empty() {
-                emit_log(LogCategory::Git, output);
+    if let Err(e) = git.push_branch().await {
+        try_git_recovery(git, &provider, &format!("{}", e), "Push branch", emit_log, abort_rx).await;
+        if let Err(e2) = git.push_branch().await {
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push branch", emit_log, abort_rx).await;
+            if let Err(e3) = git.push_branch().await {
+                return Err(e3);
             }
         }
-        Err(e) => return Err(e),
     }
 
-    // Step d: Rebase onto main again
+    // Step d: Rebase onto main again (with recovery)
     emit_status(SessionStatus::Running {
         step: SessionStep::RebasePostAi,
         iteration,
     });
     if let Err(e) = git.fetch_main().await {
-        emit_log(LogCategory::Warning, format!("Fetch failed: {}", e));
-    }
-    if let Err(e) = rebase_with_conflict_resolution(git, provider, emit_log, abort_rx).await {
-        // Clean up rebase/merge state so the next iteration doesn't get stuck
-        if git.has_active_rebase() {
-            git.abort_rebase().await.ok();
+        emit_log(LogCategory::Warning, format!("Fetch failed: {} — attempting recovery", e));
+        try_git_recovery(git, &provider, &format!("{}", e), "Fetch main", emit_log, abort_rx).await;
+        if let Err(e2) = git.fetch_main().await {
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Fetch main", emit_log, abort_rx).await;
+            if let Err(e3) = git.fetch_main().await {
+                emit_log(LogCategory::Warning, format!("Fetch still failing: {}. Proceeding with stale main.", e3));
+            }
         }
-        git.run_in_worktree(&["reset", "--hard"]).await.ok();
+    }
+    if let Err(e) = rebase_with_conflict_resolution(git, provider.clone(), emit_log, abort_rx).await {
+        // Clean up rebase/merge state so the next iteration doesn't get stuck
+        heal_git_state(git, emit_log).await;
         return Err(anyhow::anyhow!("{}", e));
     }
 
@@ -584,19 +732,20 @@ async fn git_housekeeping(
         }
     }
 
-    // Step e: Push to main
+    // Step e: Push to main (with recovery)
     emit_status(SessionStatus::Running {
         step: SessionStep::PushToMain,
         iteration,
     });
     emit_log(LogCategory::Git, "Pushing to main...".to_string());
-    match git.push_to_main().await {
-        Ok(output) => {
-            if !output.trim().is_empty() {
-                emit_log(LogCategory::Git, output);
+    if let Err(e) = git.push_to_main().await {
+        try_git_recovery(git, &provider, &format!("{}", e), "Push to main", emit_log, abort_rx).await;
+        if let Err(e2) = git.push_to_main().await {
+            try_git_recovery_ai(git, &provider, &format!("{}", e2), "Push to main", emit_log, abort_rx).await;
+            if let Err(e3) = git.push_to_main().await {
+                return Err(e3);
             }
         }
-        Err(e) => return Err(e),
     }
 
     // Steps f+g: Tag and push

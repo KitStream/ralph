@@ -330,6 +330,35 @@ impl GitOps {
         }
     }
 
+    /// Remove stale `.lock` files from the worktree's git directory.
+    /// These are left behind when a git process crashes or is killed.
+    pub async fn remove_stale_lock_files(&self, emit_log: &impl Fn(crate::events::LogCategory, String)) {
+        let git_dir = self.worktree_git_dir();
+        let lock_files = ["index.lock", "HEAD.lock", "refs.lock"];
+        for name in &lock_files {
+            let path = git_dir.join(name);
+            if path.exists() {
+                emit_log(
+                    crate::events::LogCategory::Warning,
+                    format!("Removing stale lock file: {}", path.display()),
+                );
+                tokio::fs::remove_file(&path).await.ok();
+            }
+        }
+        // Also check the main repo's lock files
+        let main_git_dir = self.project_dir.join(".git");
+        for name in &lock_files {
+            let path = main_git_dir.join(name);
+            if path.exists() {
+                emit_log(
+                    crate::events::LogCategory::Warning,
+                    format!("Removing stale lock file: {}", path.display()),
+                );
+                tokio::fs::remove_file(&path).await.ok();
+            }
+        }
+    }
+
     pub async fn tag_and_push(&self) -> anyhow::Result<String> {
         let max_attempts = 5;
         for attempt in 1..=max_attempts {
