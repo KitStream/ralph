@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-cli:
     strategy:
       matrix:
         include:
@@ -68,8 +68,77 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}${{ runner.os == 'Windows' && '.exe' || '' }}
 
+  build-desktop:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ralph-desktop-macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: ralph-desktop-macos-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ralph-desktop-windows-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: ralph-desktop-linux-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target ${{ matrix.target }}
+
+      - name: Upload macOS artifact (.dmg)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload Windows artifact (.msi)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+
+      - name: Upload Linux artifact (.deb + .AppImage)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+
   release:
-    needs: build
+    needs: [build-cli, build-desktop]
     runs-on: ubuntu-latest
 
     steps:
@@ -87,4 +156,10 @@ jobs:
         with:
           name: v${{ steps.version.outputs.version }}
           generate_release_notes: true
+          body: |
+            ## macOS CLI notice
+            macOS may block the CLI binary with a Gatekeeper warning. To fix, run:
+            ```
+            xattr -d com.apple.quarantine <path-to-binary>
+            ```
           files: artifacts/**/*
