@@ -376,7 +376,7 @@ function renderToolHeader(tool: ToolInvocation, color: string, worktreePrefix?: 
 }
 
 function renderToolDetail(tool: ToolInvocation) {
-  if (tool.tool === "Edit") {
+  if (tool.tool === "Edit" && (tool.old_string || tool.new_string)) {
     return (
       <div style={{ marginTop: 4, fontSize: "12px" }}>
         {tool.old_string.split("\n").map((line, i) => (
@@ -400,6 +400,8 @@ function ToolResultBlock({ content, isError, previewLines = 2 }: { content: stri
   const lines = content.split("\n");
   const isLong = lines.length > previewLines;
   const displayLines = expanded ? lines : lines.slice(0, previewLines);
+  // Detect if content looks like a unified diff (lines starting with +/-)
+  const isDiff = lines.some((l) => l.startsWith("+") || l.startsWith("-"));
 
   if (!content.trim()) return null;
 
@@ -413,9 +415,17 @@ function ToolResultBlock({ content, isError, previewLines = 2 }: { content: stri
       }}
       onClick={isLong ? () => setExpanded(!expanded) : undefined}
     >
-      {displayLines.map((line, i) => (
-        <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{line}</div>
-      ))}
+      {displayLines.map((line, i) => {
+        if (isDiff) {
+          if (line.startsWith("+")) {
+            return <div key={i} style={{ backgroundColor: "rgba(34,197,94,0.15)", color: "#86efac", whiteSpace: "pre" }}>{line}</div>;
+          }
+          if (line.startsWith("-")) {
+            return <div key={i} style={{ backgroundColor: "rgba(239,68,68,0.15)", color: "#fca5a5", whiteSpace: "pre" }}>{line}</div>;
+          }
+        }
+        return <div key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{line}</div>;
+      })}
       {isLong && !expanded && (
         <div style={{ color: "#64748b", fontStyle: "italic" }}>
           ... {lines.length - previewLines} more lines (click to expand)

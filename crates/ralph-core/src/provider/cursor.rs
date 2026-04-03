@@ -161,20 +161,9 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                         let tool = crate::events::ToolInvocation::Bash { command, description };
                         let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
                     }
-                    // Edit tool call
-                    else if let Some(edit) = tc.get("editToolCall") {
-                        let file_path = edit
-                            .get("args")
-                            .and_then(|a| a.get("path").or_else(|| a.get("filePath")))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let tool = crate::events::ToolInvocation::Edit {
-                            file_path,
-                            old_string: String::new(),
-                            new_string: String::new(),
-                        };
-                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                    // Edit tool call — defer to completed event where we have the diff data
+                    else if tc.get("editToolCall").is_some() {
+                        // Don't emit on started; completed handler will emit with full diff
                     }
                     // Read tool call
                     else if let Some(read) = tc.get("readToolCall") {
@@ -230,6 +219,56 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                     .to_string();
 
                 if let Some(tc) = value.get("tool_call") {
+                    // Special handling for editToolCall — emit ToolUse with diff data
+                    if let Some(edit) = tc.get("editToolCall") {
+                        let file_path = edit
+                            .get("args")
+                            .and_then(|a| a.get("path").or_else(|| a.get("filePath")))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if let Some(success) = edit.get("result").and_then(|r| r.get("success")) {
+                            let old_content = success.get("beforeFullFileContent")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let new_content = success.get("afterFullFileContent")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let tool = crate::events::ToolInvocation::Edit {
+                                file_path,
+                                old_string: old_content,
+                                new_string: new_content,
+                            };
+                            let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id.clone(), tool });
+                            let msg = success.get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let _ = output_tx.send(AiOutput::ToolResult {
+                                tool_use_id: call_id,
+                                content: msg,
+                                is_error: false,
+                            });
+                        } else if let Some(err) = edit.get("result").and_then(|r| r.get("error")) {
+                            let tool = crate::events::ToolInvocation::Edit {
+                                file_path,
+                                old_string: String::new(),
+                                new_string: String::new(),
+                            };
+                            let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id.clone(), tool });
+                            let msg = err.get("errorMessage").or_else(|| err.get("message"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("edit failed")
+                                .to_string();
+                            let _ = output_tx.send(AiOutput::ToolResult {
+                                tool_use_id: call_id,
+                                content: msg,
+                                is_error: true,
+                            });
+                        }
+                    } else {
                     // Find the tool-specific object (shellToolCall, readToolCall, etc.)
                     // and extract the result from it
                     let mut found = false;
@@ -290,6 +329,7 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             is_error: false,
                         });
                     }
+                    } // end else (non-edit tools)
                 }
             }
             "result" => {

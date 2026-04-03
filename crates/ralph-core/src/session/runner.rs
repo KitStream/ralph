@@ -374,13 +374,19 @@ pub async fn run_session(
             let (output_tx, mut output_rx) = mpsc::unbounded_channel();
             let abort_clone = abort_rx.clone();
             let working_dir = git.worktree_dir.clone();
-            let prompt_clone = match load_prompt(&config.prompt_file, &config.preamble) {
-                Ok(p) => p,
-                Err(e) => {
-                    emit_status(SessionStatus::Failed {
-                        error: format!("Failed to load prompt: {}", e),
-                    });
-                    return;
+            let prompt_clone = if resume_id.is_some() {
+                "You are resuming a previous session that was interrupted. \
+                Please continue where you left off. Check git status and your \
+                previous work before starting new changes.".to_string()
+            } else {
+                match load_prompt(&config.prompt_file, &config.preamble) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        emit_status(SessionStatus::Failed {
+                            error: format!("Failed to load prompt: {}", e),
+                        });
+                        return;
+                    }
                 }
             };
             let provider_clone = provider.clone();
