@@ -368,8 +368,15 @@ pub async fn run_session(
             }
         }
 
+        if !ai_ok {
+            emit_log(
+                LogCategory::Warning,
+                format!("{} exited with an error.", config.ai_tool),
+            );
+        }
+
         let head_changed = git.head_changed(&head_before).await.unwrap_or(false);
-        if !ai_ok || !head_changed {
+        if !head_changed {
             emit_log(
                 LogCategory::Warning,
                 format!("{} made no commits. Skipping housekeeping.", config.ai_tool),
