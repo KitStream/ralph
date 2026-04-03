@@ -54,17 +54,6 @@ pub async fn run_session(
     let git = GitOps::new(&config.project_dir, &config.branch_name, &config.main_branch);
     let provider: Arc<dyn AiProvider> = Arc::from(create_provider(&config.ai_tool));
 
-    // Load prompt
-    let prompt = match load_prompt(&config.prompt_file, &config.preamble) {
-        Ok(p) => p,
-        Err(e) => {
-            emit_status(SessionStatus::Failed {
-                error: format!("Failed to load prompt: {}", e),
-            });
-            return;
-        }
-    };
-
     // Setup
     emit_log(LogCategory::Script, "Setting up branch and worktree...".to_string());
 
@@ -118,11 +107,6 @@ pub async fn run_session(
                     continue;
                 }
             }
-        }
-
-        if *stop_rx.borrow() {
-            emit_log(LogCategory::Script, "Stop requested. Exiting.".to_string());
-            break;
         }
 
         // Step a: Rebase onto main
@@ -284,11 +268,6 @@ pub async fn run_session(
             }
         }
 
-        if *stop_rx.borrow() {
-            emit_log(LogCategory::Script, "Stop requested. Exiting.".to_string());
-            break;
-        }
-
         // Step b: Run AI
         emit_status(SessionStatus::Running {
             step: SessionStep::RunningAi,
@@ -325,7 +304,15 @@ pub async fn run_session(
             let (output_tx, mut output_rx) = mpsc::unbounded_channel();
             let abort_clone = abort_rx.clone();
             let working_dir = git.worktree_dir.clone();
-            let prompt_clone = prompt.clone();
+            let prompt_clone = match load_prompt(&config.prompt_file, &config.preamble) {
+                Ok(p) => p,
+                Err(e) => {
+                    emit_status(SessionStatus::Failed {
+                        error: format!("Failed to load prompt: {}", e),
+                    });
+                    return;
+                }
+            };
             let provider_clone = provider.clone();
 
             let ai_task = tokio::spawn(async move {
@@ -442,10 +429,6 @@ pub async fn run_session(
             }
         }
 
-        if *stop_rx.borrow() {
-            emit_log(LogCategory::Script, "Stop requested. Exiting.".to_string());
-            break;
-        }
     }
 
     emit_status(SessionStatus::Stopped);
