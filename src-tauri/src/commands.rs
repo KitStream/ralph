@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use ralph_core::discovery;
-use ralph_core::events::{RecoveryAction, SessionEvent};
+use ralph_core::events::{RecoveryAction, SessionEvent, SessionEventPayload};
 use ralph_core::provider::{AiTool, BackendModelConfig, create_provider};
 use ralph_core::session::manager::SessionManager;
 use ralph_core::session::state::{SessionConfig, SessionId};
@@ -138,13 +138,24 @@ pub async fn cancel_stop_session(
 #[tauri::command]
 pub async fn abort_session(
     manager: State<'_, Arc<SessionManager>>,
+    app: AppHandle,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
-    manager
+    let status = manager
         .abort_session(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Emit the Aborted status to the frontend so it can show Resume
+    app.emit(
+        "session-event",
+        &SessionEvent {
+            session_id: session_id.clone(),
+            payload: SessionEventPayload::StatusChanged { status },
+        },
+    )
+    .ok();
+    Ok(())
 }
 
 #[tauri::command]
@@ -253,14 +264,22 @@ fn parse_session_id(s: &str) -> Result<SessionId, String> {
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
+    let expanded = if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(rest);
+            PathBuf::from(home).join(rest)
+        } else {
+            PathBuf::from(path)
         }
     } else if path == "~" {
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home);
+            PathBuf::from(home)
+        } else {
+            PathBuf::from(path)
         }
-    }
-    PathBuf::from(path)
+    } else {
+        PathBuf::from(path)
+    };
+    // Canonicalize to resolve symlinks — ensures the stored path matches
+    // what getcwd() returns when the AI runs inside the worktree.
+    expanded.canonicalize().unwrap_or(expanded)
 }

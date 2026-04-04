@@ -229,7 +229,9 @@ impl SessionManager {
         Ok(())
     }
 
-    pub async fn abort_session(&self, id: &SessionId) -> anyhow::Result<()> {
+    /// Abort a session immediately. Returns the new `Aborted` status so the
+    /// caller can emit a `StatusChanged` event to the frontend.
+    pub async fn abort_session(&self, id: &SessionId) -> anyhow::Result<SessionStatus> {
         {
             let sessions = self.sessions.read().await;
             let handle = sessions
@@ -239,25 +241,27 @@ impl SessionManager {
             handle.abort_tx.send(true).ok();
         }
         // Set status to Aborted, preserving the step and iteration
-        {
+        let status = {
             let mut sessions = self.sessions.write().await;
-            if let Some(handle) = sessions.get_mut(id) {
-                let (step, iteration) = match &handle.info.status {
-                    SessionStatus::Running { step, iteration }
-                    | SessionStatus::Stopping { step, iteration } => {
-                        (Some(step.clone()), Some(*iteration))
-                    }
-                    _ => (None, None),
-                };
-                handle.info.status = SessionStatus::Aborted {
-                    ai_session_id: handle.info.ai_session_id.clone(),
-                    step,
-                    iteration,
-                };
-            }
-        }
+            let handle = sessions.get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+            let (step, iteration) = match &handle.info.status {
+                SessionStatus::Running { step, iteration }
+                | SessionStatus::Stopping { step, iteration } => {
+                    (Some(step.clone()), Some(*iteration))
+                }
+                _ => (None, None),
+            };
+            let aborted = SessionStatus::Aborted {
+                ai_session_id: handle.info.ai_session_id.clone(),
+                step,
+                iteration,
+            };
+            handle.info.status = aborted.clone();
+            aborted
+        };
         self.persist().await;
-        Ok(())
+        Ok(status)
     }
 
     pub async fn remove_session(&self, id: &SessionId) -> anyhow::Result<()> {

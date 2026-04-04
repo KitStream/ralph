@@ -240,8 +240,14 @@ function applyEvent(
   payload: SessionEventPayload
 ): SessionState {
   switch (payload.type) {
-    case "StatusChanged":
+    case "StatusChanged": {
+      // Don't let the runner's Stopped/Failed overwrite an Aborted status
+      // (the manager already guards this server-side; mirror it here).
+      const dominated = payload.status === "Stopped" || (typeof payload.status === "object" && "Failed" in payload.status);
+      const currentlyAborted = typeof session.status === "object" && "Aborted" in session.status;
+      if (dominated && currentlyAborted) return session;
       return { ...session, status: payload.status, recoveryRequest: null, rateLimitMessage: null };
+    }
 
     case "Log": {
       const entry: LogEntry = {
@@ -307,8 +313,12 @@ function applyEvent(
       };
     }
 
-    case "Finished":
+    case "Finished": {
+      // Don't overwrite Aborted with Stopped — preserve resume capability
+      const aborted = typeof session.status === "object" && "Aborted" in session.status;
+      if (aborted) return { ...session, recoveryRequest: null };
       return { ...session, status: "Stopped" as SessionStatus, recoveryRequest: null };
+    }
 
     case "ActionRequired":
       return {
