@@ -92,9 +92,13 @@ impl AiProvider for CursorProvider {
             cmd.arg("--model").arg(m);
         }
 
-        if let Some(id) = resume_session_id {
-            cmd.arg("--resume").arg(id);
-        }
+        // Always pass --resume so we control the session ID for crash recovery.
+        // If resuming, reuse the existing ID; otherwise generate a fresh one.
+        let session_id = resume_session_id
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        cmd.arg("--resume").arg(&session_id);
+        let _ = output_tx.send(AiOutput::SessionId(session_id));
 
         cmd.arg(prompt);
 
