@@ -48,8 +48,7 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
         iterationLogs={session.iterationLogs}
         foldedIterations={session.foldedIterations}
         onToggleFold={toggleFoldIteration}
-        projectDir={shortenPaths ? session.config.project_dir : undefined}
-        branchName={shortenPaths ? session.config.branch_name : undefined}
+        shortenPaths={shortenPaths}
         showToolOutput={showToolOutput}
         toolOutputPreviewLines={state.settings.tool_output_preview_lines}
         rateLimitMessage={session.rateLimitMessage}

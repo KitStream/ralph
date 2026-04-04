@@ -68,8 +68,10 @@ export interface LogEntry {
   id: number;
   category: LogCategory;
   text: string;
+  shortText: string;
   timestamp: number;
   aiBlock?: AiContentBlock;
+  shortAiBlock?: AiContentBlock;
   housekeepingBlock?: HousekeepingBlock;
   toolResult?: ToolResultData;
 }

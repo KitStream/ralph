@@ -187,6 +187,104 @@ impl AiContentBlock {
     }
 }
 
+/// Replace all occurrences of a worktree prefix in `text` with `⌂`.
+/// Uses OS-appropriate case sensitivity (case-insensitive on macOS/Windows,
+/// case-sensitive on Linux) and normalizes path separators.
+pub fn shorten_paths(text: &str, prefix: &str) -> String {
+    if prefix.is_empty() {
+        return text.to_string();
+    }
+    let norm_prefix: String = prefix.replace('\\', "/");
+    // Trim trailing slash from prefix for matching
+    let norm_prefix = norm_prefix.trim_end_matches('/');
+    if norm_prefix.is_empty() {
+        return text.to_string();
+    }
+
+    let norm_text: String = text.replace('\\', "/");
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (cmp_text, cmp_prefix) = (norm_text.to_lowercase(), norm_prefix.to_lowercase());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (cmp_text, cmp_prefix) = (norm_text.clone(), norm_prefix.to_string());
+
+    while i < text.len() {
+        if cmp_text[i..].starts_with(&cmp_prefix) {
+            result.push('\u{2302}');
+            i += norm_prefix.len();
+        } else {
+            // Use the original character (preserve original casing/separators)
+            result.push(text.as_bytes()[i] as char);
+            i += 1;
+        }
+    }
+    result
+}
+
+impl ToolInvocation {
+    /// Return a clone with all path fields shortened.
+    pub fn with_short_paths(&self, prefix: &str) -> Self {
+        let sp = |p: &str| shorten_paths(p, prefix);
+        match self {
+            ToolInvocation::Read { file_path } => ToolInvocation::Read {
+                file_path: sp(file_path),
+            },
+            ToolInvocation::Edit {
+                file_path,
+                old_string,
+                new_string,
+            } => ToolInvocation::Edit {
+                file_path: sp(file_path),
+                old_string: old_string.clone(),
+                new_string: new_string.clone(),
+            },
+            ToolInvocation::Write { file_path, content } => ToolInvocation::Write {
+                file_path: sp(file_path),
+                content: content.clone(),
+            },
+            ToolInvocation::Bash {
+                command,
+                description,
+            } => ToolInvocation::Bash {
+                command: sp(command),
+                description: description.clone(),
+            },
+            ToolInvocation::Glob { pattern, path } => ToolInvocation::Glob {
+                pattern: pattern.clone(),
+                path: path.as_ref().map(|p| sp(p)),
+            },
+            ToolInvocation::Grep {
+                pattern,
+                path,
+                include,
+            } => ToolInvocation::Grep {
+                pattern: pattern.clone(),
+                path: path.as_ref().map(|p| sp(p)),
+                include: include.clone(),
+            },
+            ToolInvocation::Other { name, input } => ToolInvocation::Other {
+                name: name.clone(),
+                input: input.clone(),
+            },
+        }
+    }
+}
+
+impl AiContentBlock {
+    /// Return a clone with all tool paths shortened.
+    pub fn with_short_paths(&self, prefix: &str) -> Self {
+        match self {
+            AiContentBlock::ToolUse { tool_id, tool } => AiContentBlock::ToolUse {
+                tool_id: tool_id.clone(),
+                tool: tool.with_short_paths(prefix),
+            },
+            other => other.clone(),
+        }
+    }
+}
+
 impl HousekeepingBlock {
     pub fn summary(&self) -> String {
         match self {
@@ -363,5 +461,251 @@ mod tests {
             detail: "saved changes".to_string(),
         };
         assert_eq!(block.summary(), "Stash: saved changes");
+    }
+
+    // ── shorten_paths tests ──────────────────────────────────────────
+
+    #[test]
+    fn shorten_paths_empty_prefix_returns_unchanged() {
+        assert_eq!(shorten_paths("some/path/file.rs", ""), "some/path/file.rs");
+    }
+
+    #[test]
+    fn shorten_paths_empty_text_returns_empty() {
+        assert_eq!(
+            shorten_paths("", "/home/user/project/.ralph/branch-worktree"),
+            ""
+        );
+    }
+
+    #[test]
+    fn shorten_paths_exact_match_produces_home() {
+        let prefix = "/home/user/project/.ralph/branch-worktree";
+        assert_eq!(shorten_paths(prefix, prefix), "\u{2302}");
+    }
+
+    #[test]
+    fn shorten_paths_prefix_at_start_of_path() {
+        assert_eq!(
+            shorten_paths(
+                "/home/user/project/.ralph/branch-worktree/src/main.rs",
+                "/home/user/project/.ralph/branch-worktree"
+            ),
+            "\u{2302}/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_multiple_occurrences() {
+        let prefix = "/home/user/project/.ralph/branch-worktree";
+        let text = format!("cat {}/a.txt {}/b.txt", prefix, prefix);
+        assert_eq!(
+            shorten_paths(&text, prefix),
+            "cat \u{2302}/a.txt \u{2302}/b.txt"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_trailing_slash_stripped() {
+        assert_eq!(
+            shorten_paths(
+                "/home/user/project/.ralph/branch-worktree/src/main.rs",
+                "/home/user/project/.ralph/branch-worktree/"
+            ),
+            "\u{2302}/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_backslash_normalization() {
+        // Both text and prefix use backslashes; the function normalizes
+        // separators internally for matching, but preserves original chars
+        // in the non-matched portions of the output.
+        assert_eq!(
+            shorten_paths(
+                "C:\\Users\\foo\\project\\.ralph\\wt\\src\\main.rs",
+                "C:\\Users\\foo\\project\\.ralph\\wt"
+            ),
+            "\u{2302}\\src\\main.rs"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_mixed_separators() {
+        // Prefix uses forward slashes, text uses forward slashes too
+        assert_eq!(
+            shorten_paths(
+                "C:/Users/foo/project/.ralph/wt/src/main.rs",
+                "C:/Users/foo/project/.ralph/wt"
+            ),
+            "\u{2302}/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_no_match_unchanged() {
+        let prefix = "/home/user/project/.ralph/branch-worktree";
+        assert_eq!(
+            shorten_paths("/other/path/file.rs", prefix),
+            "/other/path/file.rs"
+        );
+    }
+
+    #[test]
+    fn shorten_paths_partial_prefix_match() {
+        let prefix = "/home/user/project/.ralph/branch-worktree";
+        assert_eq!(
+            shorten_paths(
+                "/home/user/project/.ralph/branch-worktree-extra/file.rs",
+                prefix
+            ),
+            "\u{2302}-extra/file.rs"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn shorten_paths_case_insensitive_on_macos() {
+        assert_eq!(
+            shorten_paths("/users/foo/project/file.rs", "/Users/Foo/Project"),
+            "\u{2302}/file.rs"
+        );
+    }
+
+    // ── ToolInvocation::with_short_paths tests ──────────────────────
+
+    #[test]
+    fn tool_invocation_read_shortens_file_path() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let tool = ToolInvocation::Read {
+            file_path: format!("{}/src/main.rs", prefix),
+        };
+        match tool.with_short_paths(prefix) {
+            ToolInvocation::Read { file_path } => {
+                assert_eq!(file_path, "\u{2302}/src/main.rs");
+            }
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn tool_invocation_edit_shortens_file_path_not_strings() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let tool = ToolInvocation::Edit {
+            file_path: format!("{}/src/lib.rs", prefix),
+            old_string: format!("{}/old", prefix),
+            new_string: format!("{}/new", prefix),
+        };
+        match tool.with_short_paths(prefix) {
+            ToolInvocation::Edit {
+                file_path,
+                old_string,
+                new_string,
+            } => {
+                assert_eq!(file_path, "\u{2302}/src/lib.rs");
+                assert_eq!(old_string, format!("{}/old", prefix));
+                assert_eq!(new_string, format!("{}/new", prefix));
+            }
+            _ => panic!("expected Edit"),
+        }
+    }
+
+    #[test]
+    fn tool_invocation_bash_shortens_command() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let tool = ToolInvocation::Bash {
+            command: format!("ls {}/src", prefix),
+            description: None,
+        };
+        match tool.with_short_paths(prefix) {
+            ToolInvocation::Bash { command, .. } => {
+                assert_eq!(command, "ls \u{2302}/src");
+            }
+            _ => panic!("expected Bash"),
+        }
+    }
+
+    #[test]
+    fn tool_invocation_glob_shortens_path_not_pattern() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let tool = ToolInvocation::Glob {
+            pattern: "**/*.rs".to_string(),
+            path: Some(format!("{}/src", prefix)),
+        };
+        match tool.with_short_paths(prefix) {
+            ToolInvocation::Glob { pattern, path } => {
+                assert_eq!(pattern, "**/*.rs");
+                assert_eq!(path.unwrap(), "\u{2302}/src");
+            }
+            _ => panic!("expected Glob"),
+        }
+    }
+
+    #[test]
+    fn tool_invocation_other_unchanged() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let tool = ToolInvocation::Other {
+            name: "CustomTool".to_string(),
+            input: serde_json::json!({"key": format!("{}/val", prefix)}),
+        };
+        match tool.with_short_paths(prefix) {
+            ToolInvocation::Other { name, input } => {
+                assert_eq!(name, "CustomTool");
+                assert_eq!(input["key"], format!("{}/val", prefix));
+            }
+            _ => panic!("expected Other"),
+        }
+    }
+
+    // ── AiContentBlock::with_short_paths tests ─────────────────────
+
+    #[test]
+    fn ai_block_tool_use_shortens_paths() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let block = AiContentBlock::ToolUse {
+            tool_id: "t1".to_string(),
+            tool: ToolInvocation::Read {
+                file_path: format!("{}/src/main.rs", prefix),
+            },
+        };
+        match block.with_short_paths(prefix) {
+            AiContentBlock::ToolUse { tool, .. } => match tool {
+                ToolInvocation::Read { file_path } => {
+                    assert_eq!(file_path, "\u{2302}/src/main.rs");
+                }
+                _ => panic!("expected Read"),
+            },
+            _ => panic!("expected ToolUse"),
+        }
+    }
+
+    #[test]
+    fn ai_block_text_unchanged() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let block = AiContentBlock::Text {
+            text: format!("path: {}/foo", prefix),
+        };
+        match block.with_short_paths(prefix) {
+            AiContentBlock::Text { text } => {
+                assert_eq!(text, format!("path: {}/foo", prefix));
+            }
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn ai_block_tool_result_unchanged() {
+        let prefix = "/home/user/project/.ralph/wt";
+        let block = AiContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            content: format!("{}/foo", prefix),
+            is_error: false,
+        };
+        match block.with_short_paths(prefix) {
+            AiContentBlock::ToolResult { content, .. } => {
+                assert_eq!(content, format!("{}/foo", prefix));
+            }
+            _ => panic!("expected ToolResult"),
+        }
     }
 }

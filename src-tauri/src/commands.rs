@@ -214,7 +214,7 @@ pub async fn read_log_iteration_view(
     session_id: String,
     iteration: u32,
 ) -> Result<Vec<ralph_core::session::view::ViewLogEntry>, String> {
-    Ok(manager.read_iteration_view(&session_id, iteration))
+    Ok(manager.read_iteration_view(&session_id, iteration).await)
 }
 
 #[derive(Debug, Serialize)]

@@ -3,21 +3,26 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::events::{
-    AiContentBlock, HousekeepingBlock, LogCategory, SessionEventPayload, ToolResultData,
+    shorten_paths, AiContentBlock, HousekeepingBlock, LogCategory, SessionEventPayload,
+    ToolResultData,
 };
 use crate::session::log_store::LogRecord;
 
 /// A pre-processed log entry ready for rendering. Tool results are already
 /// attached to their corresponding tool-use entries, and summaries are computed.
+/// Both full and shortened (worktree prefix → ⌂) versions are provided.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewLogEntry {
     pub id: u64,
     pub category: LogCategory,
     pub text: String,
+    pub short_text: String,
     pub timestamp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_block: Option<AiContentBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_ai_block: Option<AiContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub housekeeping_block: Option<HousekeepingBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,21 +31,27 @@ pub struct ViewLogEntry {
 
 /// Transform raw log records into view-ready entries.
 /// ToolResult records are attached to their matching ToolUse entry by tool_id.
-pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
+/// `worktree_prefix` is used to produce shortened path variants.
+pub fn records_to_view_entries(records: &[LogRecord], worktree_prefix: &str) -> Vec<ViewLogEntry> {
     let mut entries = Vec::new();
     let mut tool_use_index: HashMap<String, usize> = HashMap::new();
     let mut id_counter = 0u64;
+
+    let sp = |t: &str| shorten_paths(t, worktree_prefix);
 
     for record in records {
         match &record.payload {
             SessionEventPayload::Log { category, text } => {
                 id_counter += 1;
+                let short_text = sp(text);
                 entries.push(ViewLogEntry {
                     id: id_counter,
                     category: category.clone(),
                     text: text.clone(),
+                    short_text,
                     timestamp: record.timestamp,
                     ai_block: None,
+                    short_ai_block: None,
                     housekeeping_block: None,
                     tool_result: None,
                 });
@@ -57,11 +68,12 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
                             is_error: *is_error,
                         });
                     }
-                    // Don't add ToolResult as a separate entry
                 }
                 _ => {
                     id_counter += 1;
                     let text = block.summary();
+                    let short_block = block.with_short_paths(worktree_prefix);
+                    let short_text = short_block.summary();
                     if let AiContentBlock::ToolUse { tool_id, .. } = block {
                         tool_use_index.insert(tool_id.clone(), entries.len());
                     }
@@ -69,8 +81,10 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
                         id: id_counter,
                         category: LogCategory::Ai,
                         text,
+                        short_text,
                         timestamp: record.timestamp,
                         ai_block: Some(block.clone()),
+                        short_ai_block: Some(short_block),
                         housekeeping_block: None,
                         tool_result: None,
                     });
@@ -78,12 +92,15 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
             },
             SessionEventPayload::Housekeeping { block } => {
                 id_counter += 1;
+                let text = block.summary();
                 entries.push(ViewLogEntry {
                     id: id_counter,
                     category: LogCategory::Git,
-                    text: block.summary(),
+                    text: text.clone(),
+                    short_text: text,
                     timestamp: record.timestamp,
                     ai_block: None,
+                    short_ai_block: None,
                     housekeeping_block: Some(block.clone()),
                     tool_result: None,
                 });
@@ -94,12 +111,15 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
                     .as_ref()
                     .map(|t| format!(": tagged {}", t))
                     .unwrap_or_default();
+                let text = format!("=== Iteration {} complete{} ===", iteration, tag_str);
                 entries.push(ViewLogEntry {
                     id: id_counter,
                     category: LogCategory::Script,
-                    text: format!("=== Iteration {} complete{} ===", iteration, tag_str),
+                    text: text.clone(),
+                    short_text: text,
                     timestamp: record.timestamp,
                     ai_block: None,
+                    short_ai_block: None,
                     housekeeping_block: None,
                     tool_result: None,
                 });
@@ -110,8 +130,10 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
                     id: id_counter,
                     category: LogCategory::Warning,
                     text: message.clone(),
+                    short_text: message.clone(),
                     timestamp: record.timestamp,
                     ai_block: None,
+                    short_ai_block: None,
                     housekeeping_block: None,
                     tool_result: None,
                 });
@@ -122,8 +144,10 @@ pub fn records_to_view_entries(records: &[LogRecord]) -> Vec<ViewLogEntry> {
                     id: id_counter,
                     category: LogCategory::Error,
                     text: error.clone(),
+                    short_text: error.clone(),
                     timestamp: record.timestamp,
                     ai_block: None,
+                    short_ai_block: None,
                     housekeeping_block: None,
                     tool_result: None,
                 });
@@ -154,7 +178,7 @@ mod tests {
             category: LogCategory::Script,
             text: "hello".to_string(),
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "hello");
         assert!(matches!(entries[0].category, LogCategory::Script));
@@ -180,7 +204,7 @@ mod tests {
                 },
             }),
         ];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(
             entries.len(),
             1,
@@ -201,7 +225,7 @@ mod tests {
                 is_error: true,
             },
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(
             entries.len(),
             0,
@@ -216,7 +240,7 @@ mod tests {
                 text: "thinking".to_string(),
             },
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].category, LogCategory::Ai));
         assert!(entries[0].ai_block.is_some());
@@ -230,7 +254,7 @@ mod tests {
                 description: "Checking out".to_string(),
             },
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].category, LogCategory::Git));
         assert!(entries[0].housekeeping_block.is_some());
@@ -242,7 +266,7 @@ mod tests {
             iteration: 3,
             tag: Some("1.2.3".to_string()),
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(entries[0].text.contains("Iteration 3"));
         assert!(entries[0].text.contains("tagged 1.2.3"));
@@ -254,7 +278,7 @@ mod tests {
             iteration: 1,
             tag: None,
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(entries[0].text.contains("Iteration 1"));
         assert!(!entries[0].text.contains("tagged"));
@@ -265,7 +289,7 @@ mod tests {
         let records = vec![make_record(SessionEventPayload::RateLimited {
             message: "Slow down".to_string(),
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].category, LogCategory::Warning));
         assert_eq!(entries[0].text, "Slow down");
@@ -277,7 +301,7 @@ mod tests {
             error: "dirty worktree".to_string(),
             options: vec![],
         })];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].category, LogCategory::Error));
         assert_eq!(entries[0].text, "dirty worktree");
@@ -296,7 +320,7 @@ mod tests {
                 ai_session_id: Some("s1".to_string()),
             }),
         ];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(
             entries.len(),
             0,
@@ -320,7 +344,7 @@ mod tests {
                 text: "c".to_string(),
             }),
         ];
-        let entries = records_to_view_entries(&records);
+        let entries = records_to_view_entries(&records, "");
         assert_eq!(entries[0].id, 1);
         assert_eq!(entries[1].id, 2);
         assert_eq!(entries[2].id, 3);

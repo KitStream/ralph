@@ -20,6 +20,7 @@ import type {
   HousekeepingBlock,
   IterationSummary,
 } from "../lib/types";
+import { worktreePrefix, shortenPaths, shortenAiBlock } from "../lib/paths";
 
 interface AppState {
   sessions: Map<string, SessionState>;
@@ -182,10 +183,12 @@ function attachToolResult(session: SessionState, toolUseId: string, result: Tool
       }
     }
   }
+  const truncated = result.content.slice(0, 200);
   const fallbackEntry: LogEntry = {
     id: ++logIdCounter,
     category: "Ai",
-    text: result.content.slice(0, 200),
+    text: truncated,
+    shortText: truncated,
     timestamp: Date.now(),
     aiBlock: { kind: "ToolResult", tool_use_id: toolUseId, content: result.content, is_error: result.is_error },
   };
@@ -225,19 +228,24 @@ function summarizeHousekeepingBlock(block: HousekeepingBlock): string {
   }
 }
 
+
 function applyEvent(
   session: SessionState,
   payload: SessionEventPayload
 ): SessionState {
+  const wp = worktreePrefix(session.config.project_dir, session.config.branch_name);
+
   switch (payload.type) {
     case "StatusChanged":
       return { ...session, status: payload.status, recoveryRequest: null, rateLimitMessage: null };
 
     case "Log": {
+      const text = payload.text;
       const entry: LogEntry = {
         id: ++logIdCounter,
         category: payload.category,
-        text: payload.text,
+        text,
+        shortText: shortenPaths(text, wp),
         timestamp: Date.now(),
       };
       return appendLogEntry(session, entry);
@@ -250,21 +258,27 @@ function applyEvent(
           is_error: payload.block.is_error,
         });
       }
+      const text = summarizeAiBlock(payload.block);
+      const shortBlock = shortenAiBlock(payload.block, wp);
       const entry: LogEntry = {
         id: ++logIdCounter,
         category: "Ai",
-        text: summarizeAiBlock(payload.block),
+        text,
+        shortText: summarizeAiBlock(shortBlock),
         timestamp: Date.now(),
         aiBlock: payload.block,
+        shortAiBlock: shortBlock,
       };
       return appendLogEntry(session, entry);
     }
 
     case "Housekeeping": {
+      const text = summarizeHousekeepingBlock(payload.block);
       const entry: LogEntry = {
         id: ++logIdCounter,
         category: "Git",
-        text: summarizeHousekeepingBlock(payload.block),
+        text,
+        shortText: text,
         timestamp: Date.now(),
         housekeepingBlock: payload.block,
       };

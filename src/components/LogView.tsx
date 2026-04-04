@@ -55,8 +55,7 @@ interface LogViewProps {
   iterationLogs: Map<number, LogEntry[]>;
   foldedIterations: Set<number>;
   onToggleFold: (iteration: number) => void;
-  projectDir?: string;
-  branchName?: string;
+  shortenPaths?: boolean;
   showToolOutput?: boolean;
   toolOutputPreviewLines?: number;
   rateLimitMessage?: string | null;
@@ -67,15 +66,11 @@ export function LogView({
   iterationLogs,
   foldedIterations,
   onToggleFold,
-  projectDir,
-  branchName,
+  shortenPaths = false,
   showToolOutput = true,
   toolOutputPreviewLines = 2,
   rateLimitMessage,
 }: LogViewProps) {
-  const worktreePrefix = projectDir && branchName
-    ? `${projectDir.replace(/\\/g, "/").replace(/\/+$/, "")}/.ralph/${branchName}-worktree`
-    : undefined;
 
   const parentRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -197,7 +192,7 @@ export function LogView({
                   onToggle={() => onToggleFold(item.iteration)}
                 />
               ) : (
-                <LogRow log={item.entry} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} showToolOutput={showToolOutput} />
+                <LogRow log={item.entry} shortenPaths={shortenPaths} toolOutputPreviewLines={toolOutputPreviewLines} showToolOutput={showToolOutput} />
               )}
             </div>
           );
@@ -253,39 +248,10 @@ function IterationHeader({
   );
 }
 
-function shortenPath(path: string, worktreePrefix?: string): string {
-  if (!worktreePrefix) return path;
-  const normPath = path.replace(/\\/g, "/").toLowerCase();
-  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
-  if (normPath.startsWith(normPrefix)) {
-    return "⌂" + path.slice(normPrefix.length);
-  }
-  return path;
-}
-
-/** Replace all occurrences of the worktree prefix in arbitrary text (e.g. bash commands). */
-function shortenText(text: string, worktreePrefix?: string): string {
-  if (!worktreePrefix) return text;
-  const normPrefix = worktreePrefix.replace(/\\/g, "/").toLowerCase();
-  // Walk through text case-insensitively, matching both slash directions
-  let result = "";
-  let i = 0;
-  const normText = text.replace(/\\/g, "/").toLowerCase();
-  while (i < text.length) {
-    if (normText.startsWith(normPrefix, i)) {
-      result += "⌂";
-      i += normPrefix.length;
-    } else {
-      result += text[i];
-      i++;
-    }
-  }
-  return result;
-}
-
-function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = true }: { log: LogEntry; worktreePrefix?: string; toolOutputPreviewLines?: number; showToolOutput?: boolean }) {
+function LogRow({ log, shortenPaths, toolOutputPreviewLines, showToolOutput = true }: { log: LogEntry; shortenPaths?: boolean; toolOutputPreviewLines?: number; showToolOutput?: boolean }) {
   if (log.aiBlock) {
-    return <AiBlockRow block={log.aiBlock} toolResult={showToolOutput ? log.toolResult : undefined} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} />;
+    const block = (shortenPaths && log.shortAiBlock) ? log.shortAiBlock : log.aiBlock;
+    return <AiBlockRow block={block} toolResult={showToolOutput ? log.toolResult : undefined} toolOutputPreviewLines={toolOutputPreviewLines} />;
   }
   if (log.housekeepingBlock) {
     return <HousekeepingRow block={log.housekeepingBlock} />;
@@ -303,10 +269,11 @@ function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = 
           fontSize: "12px",
         }}
       >
-        {log.text}
+        {shortenPaths ? log.shortText : log.text}
       </div>
     );
   }
+  const displayText = shortenPaths ? log.shortText : log.text;
   return (
     <div
       style={{
@@ -315,17 +282,17 @@ function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = 
         wordBreak: "break-all",
       }}
     >
-      {log.text}
+      {displayText}
     </div>
   );
 }
 
-function AiBlockRow({ block, toolResult, worktreePrefix, toolOutputPreviewLines }: { block: AiContentBlock; toolResult?: ToolResultData; worktreePrefix?: string; toolOutputPreviewLines?: number }) {
+function AiBlockRow({ block, toolResult, toolOutputPreviewLines }: { block: AiContentBlock; toolResult?: ToolResultData; toolOutputPreviewLines?: number }) {
   switch (block.kind) {
     case "Text":
       return <AiTextBlock text={block.text} />;
     case "ToolUse":
-      return <ToolUseBlock tool={block.tool} toolResult={toolResult} worktreePrefix={worktreePrefix} toolOutputPreviewLines={toolOutputPreviewLines} />;
+      return <ToolUseBlock tool={block.tool} toolResult={toolResult} toolOutputPreviewLines={toolOutputPreviewLines} />;
     case "ToolResult":
       // Standalone fallback (if no matching ToolUse was found)
       return <ToolResultBlock content={block.content} isError={block.is_error} previewLines={toolOutputPreviewLines} />;
@@ -350,11 +317,11 @@ const toolColors: Record<string, string> = {
   Other: "#a78bfa",
 };
 
-function ToolUseBlock({ tool, toolResult, worktreePrefix, toolOutputPreviewLines }: { tool: ToolInvocation; toolResult?: ToolResultData; worktreePrefix?: string; toolOutputPreviewLines?: number }) {
+function ToolUseBlock({ tool, toolResult, toolOutputPreviewLines }: { tool: ToolInvocation; toolResult?: ToolResultData; toolOutputPreviewLines?: number }) {
   const color = toolColors[tool.tool] ?? toolColors.Other;
   return (
     <div style={{ borderLeft: `2px solid ${color}`, paddingLeft: 8, margin: "2px 0" }}>
-      {renderToolHeader(tool, color, worktreePrefix)}
+      {renderToolHeader(tool, color)}
       {renderToolDetail(tool)}
       {toolResult && (
         <ToolResultBlock content={toolResult.content} isError={toolResult.is_error} previewLines={toolOutputPreviewLines} />
@@ -363,7 +330,7 @@ function ToolUseBlock({ tool, toolResult, worktreePrefix, toolOutputPreviewLines
   );
 }
 
-function renderToolHeader(tool: ToolInvocation, color: string, worktreePrefix?: string) {
+function renderToolHeader(tool: ToolInvocation, color: string) {
   const badge = (label: string) => (
     <span
       style={{
@@ -379,27 +346,25 @@ function renderToolHeader(tool: ToolInvocation, color: string, worktreePrefix?: 
       {label}
     </span>
   );
-  const fp = (path: string) => shortenPath(path, worktreePrefix);
-
   switch (tool.tool) {
     case "Read":
-      return <div>{badge("Read")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Read")}<span style={{ color: "var(--text-primary)" }}>{tool.file_path}</span></div>;
     case "Edit":
-      return <div>{badge("Edit")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Edit")}<span style={{ color: "var(--text-primary)" }}>{tool.file_path}</span></div>;
     case "Write":
-      return <div>{badge("Write")}<span style={{ color: "var(--text-primary)" }}>{fp(tool.file_path)}</span></div>;
+      return <div>{badge("Write")}<span style={{ color: "var(--text-primary)" }}>{tool.file_path}</span></div>;
     case "Bash":
       return (
         <div>
           {badge("$")}
-          <span style={{ color: "var(--text-primary)" }}>{shortenText(tool.command, worktreePrefix)}</span>
+          <span style={{ color: "var(--text-primary)" }}>{tool.command}</span>
           {tool.description && <span style={{ color: "var(--text-muted)", marginLeft: 8, fontSize: "12px" }}>{tool.description}</span>}
         </div>
       );
     case "Glob":
-      return <div>{badge("Glob")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {fp(tool.path)}</span>}</div>;
+      return <div>{badge("Glob")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {tool.path}</span>}</div>;
     case "Grep":
-      return <div>{badge("Grep")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {fp(tool.path)}</span>}</div>;
+      return <div>{badge("Grep")}<span style={{ color: "var(--text-primary)" }}>{tool.pattern}</span>{tool.path && <span style={{ color: "var(--text-muted)" }}> in {tool.path}</span>}</div>;
     case "Other": {
       // Show a compact summary of the input arguments
       const summary = Object.entries(tool.input)

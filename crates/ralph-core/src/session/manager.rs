@@ -433,12 +433,28 @@ impl SessionManager {
         self.log_store.read_iteration(session_id, iteration)
     }
 
-    pub fn read_iteration_view(
+    pub async fn read_iteration_view(
         &self,
         session_id: &str,
         iteration: u32,
     ) -> Vec<crate::session::view::ViewLogEntry> {
+        let worktree_prefix = {
+            let Ok(uuid) = uuid::Uuid::parse_str(session_id) else {
+                return Vec::new();
+            };
+            let id = SessionId(uuid);
+            let sessions = self.sessions.read().await;
+            sessions.get(&id).map(|h| {
+                let cfg = &h.info.config;
+                cfg.project_dir
+                    .join(".ralph")
+                    .join(format!("{}-worktree", cfg.branch_name))
+                    .to_string_lossy()
+                    .to_string()
+            })
+        };
+        let prefix = worktree_prefix.as_deref().unwrap_or("");
         let records = self.log_store.read_iteration(session_id, iteration);
-        crate::session::view::records_to_view_entries(&records)
+        crate::session::view::records_to_view_entries(&records, prefix)
     }
 }
