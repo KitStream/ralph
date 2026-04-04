@@ -73,7 +73,7 @@ export function LogView({
   rateLimitMessage,
 }: LogViewProps) {
   const worktreePrefix = projectDir && branchName
-    ? `${projectDir.replace(/\\/g, "/")}/.ralph/${branchName}-worktree`
+    ? `${projectDir.replace(/\\/g, "/").replace(/\/+$/, "")}/.ralph/${branchName}-worktree`
     : undefined;
 
   const parentRef = useRef<HTMLDivElement>(null);
