@@ -28,6 +28,7 @@
   --status-failed: #f87171;
   --badge-bg: #21262d;
   --grid-gap: #30363d;
+  --prompt-bg: #1a1e24;
 }
 
 [data-theme="light"] {
@@ -59,6 +60,7 @@
   --status-failed: #cf222e;
   --badge-bg: #c8ccd2;
   --grid-gap: #adb4be;
+  --prompt-bg: #d0d3d8;
 }
 
 * {

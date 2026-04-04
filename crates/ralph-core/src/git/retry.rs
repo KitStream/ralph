@@ -34,10 +34,7 @@ where
             Ok(output) => return Ok(output),
             Err(error_output) => {
                 if is_permanent_failure(&error_output) {
-                    anyhow::bail!(
-                        "Permanent failure detected, not retrying: {}",
-                        error_output
-                    );
+                    anyhow::bail!("Permanent failure detected, not retrying: {}", error_output);
                 }
                 if attempt == max_attempts {
                     anyhow::bail!(

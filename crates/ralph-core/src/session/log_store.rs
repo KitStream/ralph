@@ -47,7 +47,8 @@ impl SessionLogStore {
     }
 
     fn iteration_path(&self, session_id: &str, iteration: u32) -> PathBuf {
-        self.session_dir(session_id).join(format!("{}.jsonl", iteration))
+        self.session_dir(session_id)
+            .join(format!("{}.jsonl", iteration))
     }
 
     pub fn append(
@@ -81,10 +82,7 @@ impl SessionLogStore {
                 0
             };
 
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)?;
+            let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
             writers.insert(
                 session_id.to_string(),

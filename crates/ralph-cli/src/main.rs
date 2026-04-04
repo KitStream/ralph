@@ -55,11 +55,7 @@ async fn main() {
     let mode_info = match mode_info {
         Some(m) => m,
         None => {
-            eprintln!(
-                "{} Unknown mode: {}",
-                "ERROR:".red().bold(),
-                cli.mode
-            );
+            eprintln!("{} Unknown mode: {}", "ERROR:".red().bold(), cli.mode);
             if modes.is_empty() {
                 eprintln!("No PROMPT-<mode>.md files found in {:?}", cwd);
             } else {
@@ -76,12 +72,10 @@ async fn main() {
         }
     };
 
-    let branch_name = cli
-        .branch
-        .unwrap_or_else(|| format!("ralph-{}", cli.mode));
+    let branch_name = cli.branch.unwrap_or_else(|| format!("ralph-{}", cli.mode));
 
     let config = SessionConfig {
-        project_dir: cwd.clone(),
+        project_dir: cwd.canonicalize().unwrap_or_else(|_| cwd.clone()),
         mode: cli.mode.clone(),
         prompt_file: mode_info.prompt_file.clone(),
         branch_name,
@@ -119,7 +113,10 @@ async fn main() {
                 stop_flag.store(true, Ordering::SeqCst);
                 stop_tx.send(true).ok();
             } else {
-                eprintln!("{}", "Second Ctrl+C — aborting immediately.".yellow().bold());
+                eprintln!(
+                    "{}",
+                    "Second Ctrl+C — aborting immediately.".yellow().bold()
+                );
                 abort_flag.store(true, Ordering::SeqCst);
                 abort_tx.send(true).ok();
             }
@@ -136,8 +133,7 @@ async fn main() {
     );
     println!(
         "{}",
-        "Press Ctrl+C to stop after the current iteration, twice to abort immediately."
-            .magenta()
+        "Press Ctrl+C to stop after the current iteration, twice to abort immediately.".magenta()
     );
 
     run_session(
@@ -177,6 +173,7 @@ fn print_event(event: &SessionEvent) {
                 LogCategory::Script => text.magenta().to_string(),
                 LogCategory::Warning => text.yellow().to_string(),
                 LogCategory::Error => text.red().to_string(),
+                LogCategory::Prompt => text.dimmed().to_string(),
             };
             println!("{}", colored_text);
         }
@@ -216,43 +213,66 @@ fn print_ai_content(block: &AiContentBlock) {
         AiContentBlock::Text { text } => {
             println!("{}", text.green());
         }
-        AiContentBlock::ToolUse { tool, .. } => {
-            match tool {
-                ToolInvocation::Read { file_path } => {
-                    println!("  {} {}", "Read".blue().bold(), file_path.white());
+        AiContentBlock::ToolUse { tool, .. } => match tool {
+            ToolInvocation::Read { file_path } => {
+                println!("  {} {}", "Read".blue().bold(), file_path.white());
+            }
+            ToolInvocation::Edit {
+                file_path,
+                old_string,
+                new_string,
+            } => {
+                println!("  {} {}", "Edit".yellow().bold(), file_path.white());
+                for line in old_string.lines() {
+                    println!("    {}{}", "- ".red(), line.red());
                 }
-                ToolInvocation::Edit { file_path, old_string, new_string } => {
-                    println!("  {} {}", "Edit".yellow().bold(), file_path.white());
-                    for line in old_string.lines() {
-                        println!("    {}{}", "- ".red(), line.red());
-                    }
-                    for line in new_string.lines() {
-                        println!("    {}{}", "+ ".green(), line.green());
-                    }
-                }
-                ToolInvocation::Write { file_path, .. } => {
-                    println!("  {} {}", "Write".yellow().bold(), file_path.white());
-                }
-                ToolInvocation::Bash { command, description } => {
-                    println!("  {} {}", "$".cyan().bold(), command.white());
-                    if let Some(desc) = description {
-                        println!("    {}", desc.dimmed());
-                    }
-                }
-                ToolInvocation::Glob { pattern, path } => {
-                    let suffix = path.as_deref().map(|p| format!(" in {}", p)).unwrap_or_default();
-                    println!("  {} {}{}", "Glob".blue().bold(), pattern.white(), suffix.dimmed());
-                }
-                ToolInvocation::Grep { pattern, path, .. } => {
-                    let suffix = path.as_deref().map(|p| format!(" in {}", p)).unwrap_or_default();
-                    println!("  {} {}{}", "Grep".blue().bold(), pattern.white(), suffix.dimmed());
-                }
-                ToolInvocation::Other { name, .. } => {
-                    println!("  {} {}", "Tool".blue().bold(), name.white());
+                for line in new_string.lines() {
+                    println!("    {}{}", "+ ".green(), line.green());
                 }
             }
-        }
-        AiContentBlock::ToolResult { content, is_error, .. } => {
+            ToolInvocation::Write { file_path, .. } => {
+                println!("  {} {}", "Write".yellow().bold(), file_path.white());
+            }
+            ToolInvocation::Bash {
+                command,
+                description,
+            } => {
+                println!("  {} {}", "$".cyan().bold(), command.white());
+                if let Some(desc) = description {
+                    println!("    {}", desc.dimmed());
+                }
+            }
+            ToolInvocation::Glob { pattern, path } => {
+                let suffix = path
+                    .as_deref()
+                    .map(|p| format!(" in {}", p))
+                    .unwrap_or_default();
+                println!(
+                    "  {} {}{}",
+                    "Glob".blue().bold(),
+                    pattern.white(),
+                    suffix.dimmed()
+                );
+            }
+            ToolInvocation::Grep { pattern, path, .. } => {
+                let suffix = path
+                    .as_deref()
+                    .map(|p| format!(" in {}", p))
+                    .unwrap_or_default();
+                println!(
+                    "  {} {}{}",
+                    "Grep".blue().bold(),
+                    pattern.white(),
+                    suffix.dimmed()
+                );
+            }
+            ToolInvocation::Other { name, .. } => {
+                println!("  {} {}", "Tool".blue().bold(), name.white());
+            }
+        },
+        AiContentBlock::ToolResult {
+            content, is_error, ..
+        } => {
             let max_lines = 10;
             let total_lines = content.lines().count();
             for line in content.lines().take(max_lines) {
@@ -263,7 +283,10 @@ fn print_ai_content(block: &AiContentBlock) {
                 }
             }
             if total_lines > max_lines {
-                println!("    {}", format!("... ({} more lines)", total_lines - max_lines).dimmed());
+                println!(
+                    "    {}",
+                    format!("... ({} more lines)", total_lines - max_lines).dimmed()
+                );
             }
         }
     }
@@ -272,7 +295,10 @@ fn print_ai_content(block: &AiContentBlock) {
 fn print_housekeeping(block: &HousekeepingBlock) {
     match block {
         HousekeepingBlock::StepStarted { step, description } => {
-            println!("{}", format!("▸ [{}] {}", step_label(step), description).cyan());
+            println!(
+                "{}",
+                format!("▸ [{}] {}", step_label(step), description).cyan()
+            );
         }
         HousekeepingBlock::StepCompleted { step, summary } => {
             println!("{}", format!("✓ [{}] {}", step_label(step), summary).cyan());

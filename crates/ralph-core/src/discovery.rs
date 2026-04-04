@@ -20,10 +20,7 @@ pub fn discover_modes(dirs: &[&Path]) -> Vec<ModeInfo> {
 
         if let Ok(entries) = glob::glob(&pattern_str) {
             for entry in entries.flatten() {
-                let filename = entry
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let filename = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 if let Some(name) = filename
                     .strip_prefix("PROMPT-")

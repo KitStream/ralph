@@ -6,13 +6,17 @@ use tokio::sync::{mpsc, watch};
 
 use tokio::io::AsyncReadExt;
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+use super::{
+    detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo,
+};
 
 fn read_claude_current_model() -> Option<String> {
     let path = dirs::home_dir()?.join(".claude").join("settings.json");
     let data = std::fs::read_to_string(path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&data).ok()?;
-    json.get("model").and_then(|v| v.as_str()).map(|s| s.to_string())
+    json.get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 pub struct ClaudeProvider;
@@ -26,9 +30,21 @@ impl AiProvider for ClaudeProvider {
     async fn list_models(&self) -> BackendModelConfig {
         let current = read_claude_current_model();
         let mut models = vec![
-            ModelInfo { id: "sonnet".into(), label: "Sonnet".into(), is_default: false },
-            ModelInfo { id: "opus".into(), label: "Opus".into(), is_default: false },
-            ModelInfo { id: "haiku".into(), label: "Haiku".into(), is_default: false },
+            ModelInfo {
+                id: "sonnet".into(),
+                label: "Sonnet".into(),
+                is_default: false,
+            },
+            ModelInfo {
+                id: "opus".into(),
+                label: "Opus".into(),
+                is_default: false,
+            },
+            ModelInfo {
+                id: "haiku".into(),
+                label: "Haiku".into(),
+                is_default: false,
+            },
         ];
         // Mark the current model as default
         let matched = if let Some(cur) = &current {
@@ -128,12 +144,7 @@ impl AiProvider for ClaudeProvider {
         // If we got the result but the process is still running, give it a moment
         // then kill it — Claude can linger after emitting the result JSON.
         if got_result {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                child.wait(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
                 Ok(Ok(status)) if status.success() => return Ok(()),
                 Ok(Ok(status)) => {
                     let _ = output_tx.send(AiOutput::Error(format!(
@@ -166,7 +177,11 @@ impl AiProvider for ClaudeProvider {
             let err_msg = if stderr_buf.trim().is_empty() {
                 format!("Claude exited with code {}", status.code().unwrap_or(-1))
             } else {
-                format!("Claude exited with code {}: {}", status.code().unwrap_or(-1), stderr_buf.trim())
+                format!(
+                    "Claude exited with code {}: {}",
+                    status.code().unwrap_or(-1),
+                    stderr_buf.trim()
+                )
             };
             let _ = output_tx.send(AiOutput::Error(err_msg.clone()));
             anyhow::bail!("{}", err_msg);

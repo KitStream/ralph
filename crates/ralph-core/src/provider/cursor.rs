@@ -5,7 +5,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+use super::{
+    detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo,
+};
 
 pub struct CursorProvider;
 
@@ -35,9 +37,7 @@ impl AiProvider for CursorProvider {
                     }
                     // Expected format: "id - Label  (default)" or "id - Label"
                     let is_default = line.contains("(default)") || line.contains("(current)");
-                    let clean = line
-                        .replace("(default)", "")
-                        .replace("(current)", "");
+                    let clean = line.replace("(default)", "").replace("(current)", "");
                     let parts: Vec<&str> = clean.splitn(2, " - ").collect();
                     let id = parts[0].trim().to_string();
                     let label = if parts.len() > 1 {
@@ -219,8 +219,14 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             .or_else(|| tc.get("description"))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
-                        let tool = crate::events::ToolInvocation::Bash { command, description };
-                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                        let tool = crate::events::ToolInvocation::Bash {
+                            command,
+                            description,
+                        };
+                        let _ = output_tx.send(AiOutput::ToolUse {
+                            tool_id: call_id,
+                            tool,
+                        });
                     }
                     // Edit tool call — defer to completed event where we have the diff data
                     else if tc.get("editToolCall").is_some() {
@@ -235,7 +241,10 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             .unwrap_or("")
                             .to_string();
                         let tool = crate::events::ToolInvocation::Read { file_path };
-                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                        let _ = output_tx.send(AiOutput::ToolUse {
+                            tool_id: call_id,
+                            tool,
+                        });
                     }
                     // Generic fallback — discover tool type from the key name (e.g. "listDirToolCall")
                     else {
@@ -268,7 +277,10 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             other => other,
                         };
                         let tool = parse_tool_invocation(canonical_name, &args);
-                        let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id, tool });
+                        let _ = output_tx.send(AiOutput::ToolUse {
+                            tool_id: call_id,
+                            tool,
+                        });
                     }
                 }
             }
@@ -289,11 +301,13 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             .unwrap_or("")
                             .to_string();
                         if let Some(success) = edit.get("result").and_then(|r| r.get("success")) {
-                            let old_content = success.get("beforeFullFileContent")
+                            let old_content = success
+                                .get("beforeFullFileContent")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let new_content = success.get("afterFullFileContent")
+                            let new_content = success
+                                .get("afterFullFileContent")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
@@ -302,8 +316,12 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                                 old_string: old_content,
                                 new_string: new_content,
                             };
-                            let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id.clone(), tool });
-                            let msg = success.get("message")
+                            let _ = output_tx.send(AiOutput::ToolUse {
+                                tool_id: call_id.clone(),
+                                tool,
+                            });
+                            let msg = success
+                                .get("message")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
@@ -318,8 +336,13 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                                 old_string: String::new(),
                                 new_string: String::new(),
                             };
-                            let _ = output_tx.send(AiOutput::ToolUse { tool_id: call_id.clone(), tool });
-                            let msg = err.get("errorMessage").or_else(|| err.get("message"))
+                            let _ = output_tx.send(AiOutput::ToolUse {
+                                tool_id: call_id.clone(),
+                                tool,
+                            });
+                            let msg = err
+                                .get("errorMessage")
+                                .or_else(|| err.get("message"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("edit failed")
                                 .to_string();
@@ -330,66 +353,79 @@ fn parse_cursor_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
                             });
                         }
                     } else {
-                    // Find the tool-specific object (shellToolCall, readToolCall, etc.)
-                    // and extract the result from it
-                    let mut found = false;
-                    for (key, tool_obj) in tc.as_object().into_iter().flat_map(|m| m.iter()) {
-                        if !key.ends_with("ToolCall") && !key.ends_with("_tool_call") {
-                            continue;
-                        }
-                        let Some(result) = tool_obj.get("result") else { continue };
-                        found = true;
+                        // Find the tool-specific object (shellToolCall, readToolCall, etc.)
+                        // and extract the result from it
+                        let mut found = false;
+                        for (key, tool_obj) in tc.as_object().into_iter().flat_map(|m| m.iter()) {
+                            if !key.ends_with("ToolCall") && !key.ends_with("_tool_call") {
+                                continue;
+                            }
+                            let Some(result) = tool_obj.get("result") else {
+                                continue;
+                            };
+                            found = true;
 
-                        if let Some(success) = result.get("success") {
-                            // Shell tool: stdout/stderr/exitCode
-                            if let Some(stdout) = success.get("stdout").and_then(|v| v.as_str()) {
-                                let stderr = success.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-                                let exit_code = success.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let content = if stderr.is_empty() {
-                                    stdout.to_string()
-                                } else {
-                                    format!("{}\n{}", stdout, stderr)
-                                };
-                                let _ = output_tx.send(AiOutput::ToolResult {
-                                    tool_use_id: call_id.clone(),
-                                    content,
-                                    is_error: exit_code != 0,
-                                });
-                            }
-                            // Read/other tools: content field, diffString, or message
-                            else if let Some(content) = success.get("content")
-                                .or_else(|| success.get("diffString"))
-                                .or_else(|| success.get("message"))
-                                .and_then(|v| v.as_str())
+                            if let Some(success) = result.get("success") {
+                                // Shell tool: stdout/stderr/exitCode
+                                if let Some(stdout) = success.get("stdout").and_then(|v| v.as_str())
+                                {
+                                    let stderr = success
+                                        .get("stderr")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let exit_code = success
+                                        .get("exitCode")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or(0);
+                                    let content = if stderr.is_empty() {
+                                        stdout.to_string()
+                                    } else {
+                                        format!("{}\n{}", stdout, stderr)
+                                    };
+                                    let _ = output_tx.send(AiOutput::ToolResult {
+                                        tool_use_id: call_id.clone(),
+                                        content,
+                                        is_error: exit_code != 0,
+                                    });
+                                }
+                                // Read/other tools: content field, diffString, or message
+                                else if let Some(content) = success
+                                    .get("content")
+                                    .or_else(|| success.get("diffString"))
+                                    .or_else(|| success.get("message"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    let _ = output_tx.send(AiOutput::ToolResult {
+                                        tool_use_id: call_id.clone(),
+                                        content: content.to_string(),
+                                        is_error: false,
+                                    });
+                                }
+                            } else if let Some(err) =
+                                result.get("error").or_else(|| result.get("failure"))
                             {
+                                let msg = err
+                                    .get("stdout")
+                                    .or_else(|| err.get("message"))
+                                    .or_else(|| err.get("errorMessage"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("error");
                                 let _ = output_tx.send(AiOutput::ToolResult {
                                     tool_use_id: call_id.clone(),
-                                    content: content.to_string(),
-                                    is_error: false,
+                                    content: msg.to_string(),
+                                    is_error: true,
                                 });
                             }
-                        } else if let Some(err) = result.get("error").or_else(|| result.get("failure")) {
-                            let msg = err.get("stdout")
-                                .or_else(|| err.get("message"))
-                                .or_else(|| err.get("errorMessage"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("error");
+                            break;
+                        }
+                        if !found {
+                            // Last resort: emit empty result so the UI doesn't hang
                             let _ = output_tx.send(AiOutput::ToolResult {
-                                tool_use_id: call_id.clone(),
-                                content: msg.to_string(),
-                                is_error: true,
+                                tool_use_id: call_id,
+                                content: String::new(),
+                                is_error: false,
                             });
                         }
-                        break;
-                    }
-                    if !found {
-                        // Last resort: emit empty result so the UI doesn't hang
-                        let _ = output_tx.send(AiOutput::ToolResult {
-                            tool_use_id: call_id,
-                            content: String::new(),
-                            is_error: false,
-                        });
-                    }
                     } // end else (non-edit tools)
                 }
             }

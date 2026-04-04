@@ -27,9 +27,7 @@ pub enum AiOutput {
         is_error: bool,
     },
     /// Rate limit hit — the AI provider wants us to wait.
-    RateLimited {
-        message: String,
-    },
+    RateLimited { message: String },
     /// Execution finished with summary.
     Finished {
         duration_secs: f64,
@@ -80,8 +78,7 @@ pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvoc
             let pattern = opt_str_field("pattern")
                 .or_else(|| opt_str_field("globPattern"))
                 .unwrap_or_default();
-            let path = opt_str_field("path")
-                .or_else(|| opt_str_field("targetDirectory"));
+            let path = opt_str_field("path").or_else(|| opt_str_field("targetDirectory"));
             ToolInvocation::Glob { pattern, path }
         }
         "Grep" => {
@@ -92,7 +89,11 @@ pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvoc
             let path = opt_str_field("path")
                 .or_else(|| opt_str_field("directory"))
                 .or_else(|| opt_str_field("targetDirectory"));
-            ToolInvocation::Grep { pattern, path, include: opt_str_field("include") }
+            ToolInvocation::Grep {
+                pattern,
+                path,
+                include: opt_str_field("include"),
+            }
         }
         // Copilot tools
         "view" => ToolInvocation::Read {

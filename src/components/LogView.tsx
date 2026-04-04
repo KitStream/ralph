@@ -17,6 +17,7 @@ const categoryColorVars: Record<LogCategory, string> = {
   Script: "var(--log-script)",
   Warning: "var(--log-warning)",
   Error: "var(--log-error)",
+  Prompt: "var(--text-secondary)",
 };
 
 type DisplayItem =
@@ -288,6 +289,23 @@ function LogRow({ log, worktreePrefix, toolOutputPreviewLines, showToolOutput = 
   }
   if (log.housekeepingBlock) {
     return <HousekeepingRow block={log.housekeepingBlock} />;
+  }
+  if (log.category === "Prompt") {
+    return (
+      <div
+        style={{
+          backgroundColor: "var(--prompt-bg)",
+          color: "var(--text-secondary)",
+          padding: "6px 8px",
+          borderRadius: 4,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          fontSize: "12px",
+        }}
+      >
+        {log.text}
+      </div>
+    );
   }
   return (
     <div

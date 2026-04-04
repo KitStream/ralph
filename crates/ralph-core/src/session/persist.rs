@@ -40,7 +40,8 @@ pub fn load_sessions() -> anyhow::Result<Vec<SessionInfo>> {
     // Sessions that were Running/Stopping when Ralph exited were interrupted
     for session in &mut sessions {
         match &session.status {
-            SessionStatus::Running { step, iteration } | SessionStatus::Stopping { step, iteration } => {
+            SessionStatus::Running { step, iteration }
+            | SessionStatus::Stopping { step, iteration } => {
                 session.status = SessionStatus::Aborted {
                     ai_session_id: session.ai_session_id.clone(),
                     step: Some(step.clone()),

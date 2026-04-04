@@ -24,7 +24,11 @@ fn parse_codex_models_cache(path: &Path) -> Option<BackendModelConfig> {
         if visibility != "list" {
             continue;
         }
-        let slug = m.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let slug = m
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let display_name = m
             .get("display_name")
             .and_then(|v| v.as_str())
@@ -72,8 +76,16 @@ impl AiProvider for CodexProvider {
         // Fallback
         BackendModelConfig {
             models: vec![
-                ModelInfo { id: "o3".into(), label: "o3".into(), is_default: true },
-                ModelInfo { id: "o4-mini".into(), label: "o4-mini".into(), is_default: false },
+                ModelInfo {
+                    id: "o3".into(),
+                    label: "o3".into(),
+                    is_default: true,
+                },
+                ModelInfo {
+                    id: "o4-mini".into(),
+                    label: "o4-mini".into(),
+                    is_default: false,
+                },
             ],
             supports_freeform: true,
             current_model: Some("o3".into()),
@@ -184,10 +196,7 @@ fn parse_codex_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let status = item
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
                         if status == "in_progress" {
                             // item.started — emit tool use
@@ -203,10 +212,8 @@ fn parse_codex_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let exit_code = item
-                                .get("exit_code")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
+                            let exit_code =
+                                item.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
                             let _ = output_tx.send(AiOutput::ToolResult {
                                 tool_use_id: tool_id,
                                 content: output,
