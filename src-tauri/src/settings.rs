@@ -12,6 +12,10 @@ pub struct AppSettings {
     pub recent_project_dirs: Vec<String>,
     #[serde(default)]
     pub recent_preambles: Vec<String>,
+    #[serde(default)]
+    pub default_mode: String,
+    #[serde(default)]
+    pub default_preamble: String,
     #[serde(default = "default_tool_output_preview_lines")]
     pub tool_output_preview_lines: u32,
 }
@@ -47,6 +51,8 @@ impl Default for AppSettings {
             default_tagging_enabled: true,
             recent_project_dirs: Vec::new(),
             recent_preambles: Vec::new(),
+            default_mode: String::new(),
+            default_preamble: String::new(),
             tool_output_preview_lines: 2,
         }
     }

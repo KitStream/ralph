@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use ralph_core::discovery;
 use ralph_core::events::{RecoveryAction, SessionEvent, SessionEventPayload};
-use ralph_core::provider::{AiTool, BackendModelConfig, create_provider};
+use ralph_core::provider::{create_provider, AiTool, BackendModelConfig};
 use ralph_core::session::manager::SessionManager;
 use ralph_core::session::state::{SessionConfig, SessionId};
 
@@ -65,10 +65,7 @@ pub async fn create_session(
     manager: State<'_, Arc<SessionManager>>,
     request: CreateSessionRequest,
 ) -> Result<String, String> {
-    let ai_tool: AiTool = request
-        .ai_tool
-        .parse()
-        .map_err(|e: String| e)?;
+    let ai_tool: AiTool = request.ai_tool.parse().map_err(|e: String| e)?;
 
     let config = SessionConfig {
         project_dir: expand_tilde(&request.project_dir),
@@ -117,22 +114,42 @@ pub async fn resume_session(
 #[tauri::command]
 pub async fn stop_session(
     manager: State<'_, Arc<SessionManager>>,
+    app: AppHandle,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
-    manager.stop_session(&id).await.map_err(|e| e.to_string())
+    let status = manager.stop_session(&id).await.map_err(|e| e.to_string())?;
+    app.emit(
+        "session-event",
+        &SessionEvent {
+            session_id: session_id.clone(),
+            payload: SessionEventPayload::StatusChanged { status },
+        },
+    )
+    .ok();
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn cancel_stop_session(
     manager: State<'_, Arc<SessionManager>>,
+    app: AppHandle,
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
-    manager
+    let status = manager
         .cancel_stop_session(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    app.emit(
+        "session-event",
+        &SessionEvent {
+            session_id: session_id.clone(),
+            payload: SessionEventPayload::StatusChanged { status },
+        },
+    )
+    .ok();
+    Ok(())
 }
 
 #[tauri::command]
@@ -164,10 +181,7 @@ pub async fn remove_session(
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
-    manager
-        .remove_session(&id)
-        .await
-        .map_err(|e| e.to_string())
+    manager.remove_session(&id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -192,6 +206,15 @@ pub async fn read_log_iteration(
     iteration: u32,
 ) -> Result<Vec<ralph_core::session::log_store::LogRecord>, String> {
     Ok(manager.read_iteration(&session_id, iteration))
+}
+
+#[tauri::command]
+pub async fn read_log_iteration_view(
+    manager: State<'_, Arc<SessionManager>>,
+    session_id: String,
+    iteration: u32,
+) -> Result<Vec<ralph_core::session::view::ViewLogEntry>, String> {
+    Ok(manager.read_iteration_view(&session_id, iteration))
 }
 
 #[derive(Debug, Serialize)]

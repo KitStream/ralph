@@ -8,6 +8,31 @@ pub enum RebaseError {
     Permanent(String),
 }
 
+/// Trait abstracting git operations for testability.
+#[async_trait::async_trait]
+pub trait GitOperations: Send + Sync {
+    fn worktree_dir(&self) -> PathBuf;
+    fn has_active_rebase(&self) -> bool;
+    async fn ensure_branch_exists(&self) -> anyhow::Result<()>;
+    async fn ensure_worktree(&self) -> anyhow::Result<()>;
+    async fn checkout_branch(&self) -> anyhow::Result<()>;
+    async fn fetch_main(&self) -> anyhow::Result<String>;
+    async fn rebase_onto_main(&self) -> Result<String, RebaseError>;
+    async fn abort_rebase(&self) -> anyhow::Result<()>;
+    async fn push_branch(&self) -> anyhow::Result<String>;
+    async fn push_to_main(&self) -> anyhow::Result<String>;
+    async fn get_head(&self) -> anyhow::Result<String>;
+    async fn head_changed(&self, before: &str) -> anyhow::Result<bool>;
+    async fn tag_and_push(&self) -> anyhow::Result<String>;
+    async fn diff_stat_against_main(&self) -> anyhow::Result<String>;
+    async fn verify_main_is_ancestor(&self) -> anyhow::Result<bool>;
+    async fn run_in_worktree(&self, args: &[&str]) -> Result<String, String>;
+    async fn remove_stale_lock_files(
+        &self,
+        emit_log: &(dyn Fn(crate::events::LogCategory, String) + Send + Sync),
+    );
+}
+
 pub struct GitOps {
     pub project_dir: PathBuf,
     pub worktree_dir: PathBuf,
@@ -179,10 +204,7 @@ impl GitOps {
 
     pub async fn rebase_onto_main(&self) -> Result<String, RebaseError> {
         let target = format!("origin/{}", self.main_branch);
-        match self
-            .run_git(&self.worktree_dir, &["rebase", &target])
-            .await
-        {
+        match self.run_git(&self.worktree_dir, &["rebase", &target]).await {
             Ok(output) => Ok(output),
             Err(output) => {
                 if self.has_active_rebase() {
@@ -298,10 +320,7 @@ impl GitOps {
 
     pub async fn get_latest_tag(&self) -> anyhow::Result<String> {
         let output = self
-            .run_git(
-                &self.project_dir,
-                &["tag", "--sort=-v:refname"],
-            )
+            .run_git(&self.project_dir, &["tag", "--sort=-v:refname"])
             .await
             .unwrap_or_default();
 
@@ -332,7 +351,10 @@ impl GitOps {
 
     /// Remove stale `.lock` files from the worktree's git directory.
     /// These are left behind when a git process crashes or is killed.
-    pub async fn remove_stale_lock_files(&self, emit_log: &impl Fn(crate::events::LogCategory, String)) {
+    pub async fn remove_stale_lock_files(
+        &self,
+        emit_log: &(dyn Fn(crate::events::LogCategory, String) + Send + Sync),
+    ) {
         let git_dir = self.worktree_git_dir();
         let lock_files = ["index.lock", "HEAD.lock", "refs.lock"];
         for name in &lock_files {
@@ -399,5 +421,80 @@ impl GitOps {
             "Failed to create and push a unique tag after {} attempts",
             max_attempts
         )
+    }
+}
+
+#[async_trait::async_trait]
+impl GitOperations for GitOps {
+    fn worktree_dir(&self) -> PathBuf {
+        self.worktree_dir.clone()
+    }
+
+    fn has_active_rebase(&self) -> bool {
+        let git_dir = self.worktree_git_dir();
+        git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+    }
+
+    async fn ensure_branch_exists(&self) -> anyhow::Result<()> {
+        GitOps::ensure_branch_exists(self).await
+    }
+
+    async fn ensure_worktree(&self) -> anyhow::Result<()> {
+        GitOps::ensure_worktree(self).await
+    }
+
+    async fn checkout_branch(&self) -> anyhow::Result<()> {
+        GitOps::checkout_branch(self).await
+    }
+
+    async fn fetch_main(&self) -> anyhow::Result<String> {
+        GitOps::fetch_main(self).await
+    }
+
+    async fn rebase_onto_main(&self) -> Result<String, RebaseError> {
+        GitOps::rebase_onto_main(self).await
+    }
+
+    async fn abort_rebase(&self) -> anyhow::Result<()> {
+        GitOps::abort_rebase(self).await
+    }
+
+    async fn push_branch(&self) -> anyhow::Result<String> {
+        GitOps::push_branch(self).await
+    }
+
+    async fn push_to_main(&self) -> anyhow::Result<String> {
+        GitOps::push_to_main(self).await
+    }
+
+    async fn get_head(&self) -> anyhow::Result<String> {
+        GitOps::get_head(self).await
+    }
+
+    async fn head_changed(&self, before: &str) -> anyhow::Result<bool> {
+        GitOps::head_changed(self, before).await
+    }
+
+    async fn tag_and_push(&self) -> anyhow::Result<String> {
+        GitOps::tag_and_push(self).await
+    }
+
+    async fn diff_stat_against_main(&self) -> anyhow::Result<String> {
+        GitOps::diff_stat_against_main(self).await
+    }
+
+    async fn verify_main_is_ancestor(&self) -> anyhow::Result<bool> {
+        GitOps::verify_main_is_ancestor(self).await
+    }
+
+    async fn run_in_worktree(&self, args: &[&str]) -> Result<String, String> {
+        GitOps::run_in_worktree(self, args).await
+    }
+
+    async fn remove_stale_lock_files(
+        &self,
+        emit_log: &(dyn Fn(crate::events::LogCategory, String) + Send + Sync),
+    ) {
+        GitOps::remove_stale_lock_files(self, emit_log).await
     }
 }

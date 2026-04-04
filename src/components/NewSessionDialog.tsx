@@ -25,7 +25,7 @@ export function NewSessionDialog({
     state.settings.default_main_branch
   );
   const [preamble, setPreamble] = useState(
-    state.settings.recent_preambles[0] ?? ""
+    state.settings.default_preamble ?? ""
   );
   const [taggingEnabled, setTaggingEnabled] = useState(
     state.settings.default_tagging_enabled
@@ -49,7 +49,7 @@ export function NewSessionDialog({
       setAiTool(state.settings.default_ai_tool);
       setMainBranch(state.settings.default_main_branch);
       setTaggingEnabled(state.settings.default_tagging_enabled);
-      setPreamble(state.settings.recent_preambles[0] ?? "");
+      setPreamble(state.settings.default_preamble ?? "");
     }
   }, [isOpen, state.settings]);
 
@@ -79,9 +79,11 @@ export function NewSessionDialog({
 
   useEffect(() => {
     if (modes.length > 0 && !selectedMode) {
-      setSelectedMode(modes[0].name);
+      const defaultMode = state.settings.default_mode;
+      const match = defaultMode && modes.find((m) => m.name === defaultMode);
+      setSelectedMode(match ? match.name : modes[0].name);
     }
-  }, [modes, selectedMode]);
+  }, [modes, selectedMode, state.settings.default_mode]);
 
   useEffect(() => {
     if (selectedMode) {

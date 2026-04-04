@@ -5,7 +5,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 
-use super::{detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo};
+use super::{
+    detect_rate_limit, parse_tool_invocation, AiOutput, AiProvider, BackendModelConfig, ModelInfo,
+};
 
 fn copilot_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".copilot").join("config.json"))
@@ -15,16 +17,38 @@ fn read_copilot_current_model() -> Option<String> {
     let path = copilot_config_path()?;
     let data = std::fs::read_to_string(path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&data).ok()?;
-    json.get("model").and_then(|v| v.as_str()).map(|s| s.to_string())
+    json.get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn copilot_known_models() -> Vec<ModelInfo> {
     vec![
-        ModelInfo { id: "claude-sonnet-4.6".into(), label: "Claude Sonnet 4.6".into(), is_default: false },
-        ModelInfo { id: "claude-opus-4.6".into(), label: "Claude Opus 4.6".into(), is_default: false },
-        ModelInfo { id: "gpt-5.2".into(), label: "GPT-5.2".into(), is_default: false },
-        ModelInfo { id: "gpt-5-mini".into(), label: "GPT-5 mini".into(), is_default: false },
-        ModelInfo { id: "gpt-4.1".into(), label: "GPT-4.1".into(), is_default: false },
+        ModelInfo {
+            id: "claude-sonnet-4.6".into(),
+            label: "Claude Sonnet 4.6".into(),
+            is_default: false,
+        },
+        ModelInfo {
+            id: "claude-opus-4.6".into(),
+            label: "Claude Opus 4.6".into(),
+            is_default: false,
+        },
+        ModelInfo {
+            id: "gpt-5.2".into(),
+            label: "GPT-5.2".into(),
+            is_default: false,
+        },
+        ModelInfo {
+            id: "gpt-5-mini".into(),
+            label: "GPT-5 mini".into(),
+            is_default: false,
+        },
+        ModelInfo {
+            id: "gpt-4.1".into(),
+            label: "GPT-4.1".into(),
+            is_default: false,
+        },
     ]
 }
 
@@ -88,9 +112,13 @@ impl AiProvider for CopilotProvider {
             cmd.arg("--model").arg(m);
         }
 
-        if let Some(id) = resume_session_id {
-            cmd.arg(format!("--resume={}", id));
-        }
+        // Always pass --resume so we control the session ID for crash recovery.
+        // If resuming, reuse the existing ID; otherwise generate a fresh one.
+        let session_id = resume_session_id
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        cmd.arg(format!("--resume={}", session_id));
+        let _ = output_tx.send(AiOutput::SessionId(session_id));
 
         let mut child = cmd
             .current_dir(working_dir)
@@ -104,13 +132,14 @@ impl AiProvider for CopilotProvider {
         let mut stderr = child.stderr.take().unwrap();
         let reader = tokio::io::BufReader::new(stdout);
         let mut lines = reader.lines();
+        let mut text_buf = String::new();
 
         loop {
             tokio::select! {
                 line = lines.next_line() => {
                     match line {
                         Ok(Some(line)) => {
-                            parse_copilot_json_line(&line, &output_tx);
+                            parse_copilot_json_line(&line, &output_tx, &mut text_buf);
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -127,6 +156,11 @@ impl AiProvider for CopilotProvider {
                     }
                 }
             }
+        }
+
+        // Flush any remaining accumulated text
+        if !text_buf.is_empty() {
+            let _ = output_tx.send(AiOutput::Text(std::mem::take(&mut text_buf)));
         }
 
         let mut stderr_buf = String::new();
@@ -150,7 +184,11 @@ impl AiProvider for CopilotProvider {
             let err_msg = if stderr_buf.trim().is_empty() {
                 format!("Copilot exited with code {}", status.code().unwrap_or(-1))
             } else {
-                format!("Copilot exited with code {}: {}", status.code().unwrap_or(-1), stderr_buf.trim())
+                format!(
+                    "Copilot exited with code {}: {}",
+                    status.code().unwrap_or(-1),
+                    stderr_buf.trim()
+                )
             };
             let _ = output_tx.send(AiOutput::Error(err_msg.clone()));
             anyhow::bail!("{}", err_msg);
@@ -159,33 +197,44 @@ impl AiProvider for CopilotProvider {
     }
 }
 
-fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutput>) {
+fn flush_text_buf(text_buf: &mut String, output_tx: &mpsc::UnboundedSender<AiOutput>) {
+    if !text_buf.is_empty() {
+        let _ = output_tx.send(AiOutput::Text(std::mem::take(text_buf)));
+    }
+}
+
+fn parse_copilot_json_line(
+    line: &str,
+    output_tx: &mpsc::UnboundedSender<AiOutput>,
+    text_buf: &mut String,
+) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         if !line.trim().is_empty() {
-            let _ = output_tx.send(AiOutput::Text(line.to_string()));
+            text_buf.push_str(line);
         }
         return;
     };
 
     match value.get("type").and_then(|t| t.as_str()) {
         Some("assistant.message_delta") => {
-            // Streaming text delta
+            // Streaming text delta — accumulate instead of emitting immediately
             if let Some(text) = value
                 .get("data")
                 .and_then(|d| d.get("deltaContent"))
                 .and_then(|c| c.as_str())
             {
                 if !text.trim().is_empty() {
-                    let _ = output_tx.send(AiOutput::Text(text.to_string()));
+                    text_buf.push_str(text);
                 }
             }
         }
         Some("assistant.message") => {
-            // Full message — text already received via message_delta events,
-            // tool requests will come via tool.execution_start events.
-            // Nothing to emit here.
+            // Full message complete — flush accumulated text
+            flush_text_buf(text_buf, output_tx);
         }
         Some("tool.execution_start") => {
+            // Flush text before tool events
+            flush_text_buf(text_buf, output_tx);
             // Tool invocation started — already emitted from assistant.message toolRequests,
             // but we can use this as a fallback
             if let Some(data) = value.get("data") {
@@ -207,7 +256,7 @@ fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutpu
             }
         }
         Some("tool.execution_complete") => {
-            // Tool result
+            flush_text_buf(text_buf, output_tx);
             if let Some(data) = value.get("data") {
                 let tool_use_id = data
                     .get("toolCallId")
@@ -232,9 +281,7 @@ fn parse_copilot_json_line(line: &str, output_tx: &mpsc::UnboundedSender<AiOutpu
             }
         }
         Some("result") => {
-            if let Some(sid) = value.get("sessionId").and_then(|s| s.as_str()) {
-                let _ = output_tx.send(AiOutput::SessionId(sid.to_string()));
-            }
+            flush_text_buf(text_buf, output_tx);
         }
         _ => {}
     }

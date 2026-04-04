@@ -74,17 +74,11 @@ export interface LogEntry {
   toolResult?: ToolResultData;
 }
 
-export type LogCategory = "Git" | "Ai" | "Script" | "Warning" | "Error";
+export type LogCategory = "Git" | "Ai" | "Script" | "Warning" | "Error" | "Prompt";
 
 export interface IterationSummary {
   iteration: number;
   entry_count: number;
-}
-
-export interface LogRecord {
-  line_no: number;
-  timestamp: number;
-  payload: SessionEventPayload;
 }
 
 export interface SessionState {
@@ -133,6 +127,8 @@ export interface AppSettings {
   default_tagging_enabled: boolean;
   recent_project_dirs: string[];
   recent_preambles: string[];
+  default_mode: string;
+  default_preamble: string;
   tool_output_preview_lines: number;
 }
 

@@ -1,8 +1,8 @@
 mod commands;
 mod settings;
 
-use std::sync::Arc;
 use ralph_core::session::manager::SessionManager;
+use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +22,7 @@ pub fn run() {
             commands::list_sessions,
             commands::list_log_iterations,
             commands::read_log_iteration,
+            commands::read_log_iteration_view,
             commands::get_available_tools,
             commands::list_backend_models,
             commands::resume_session,

@@ -6,7 +6,7 @@ import type {
   SessionInfo,
   AppSettings,
   IterationSummary,
-  LogRecord,
+  LogEntry,
 } from "./types";
 
 export interface CreateSessionRequest {
@@ -79,8 +79,8 @@ export async function listLogIterations(sessionId: string): Promise<IterationSum
   return invoke("list_log_iterations", { sessionId });
 }
 
-export async function readLogIteration(sessionId: string, iteration: number): Promise<LogRecord[]> {
-  return invoke("read_log_iteration", { sessionId, iteration });
+export async function readLogIterationView(sessionId: string, iteration: number): Promise<LogEntry[]> {
+  return invoke("read_log_iteration_view", { sessionId, iteration });
 }
 
 export async function sendRecoveryAction(

@@ -107,28 +107,40 @@ impl SessionManager {
                 .get(id)
                 .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
             match &handle.info.status {
-                SessionStatus::Aborted { ai_session_id, step, iteration } => {
-                    (ai_session_id.clone(), step.clone(), *iteration)
-                }
-                other => anyhow::bail!("Can only resume aborted sessions, current status: {:?}", other),
+                SessionStatus::Aborted {
+                    ai_session_id,
+                    step,
+                    iteration,
+                } => (ai_session_id.clone(), step.clone(), *iteration),
+                other => anyhow::bail!(
+                    "Can only resume aborted sessions, current status: {:?}",
+                    other
+                ),
             }
         };
 
         // Log the resume attempt
-        let step_info = resume_step.as_ref().map(|s| format!(" at step {}", s)).unwrap_or_default();
+        let step_info = resume_step
+            .as_ref()
+            .map(|s| format!(" at step {}", s))
+            .unwrap_or_default();
         emit(SessionEvent {
             session_id: id.to_string(),
             payload: SessionEventPayload::Log {
                 category: crate::events::LogCategory::Script,
                 text: format!(
                     "Resuming session{}{}...",
-                    ai_session_id.as_ref().map(|s| format!(" (AI session: {})", s)).unwrap_or_default(),
+                    ai_session_id
+                        .as_ref()
+                        .map(|s| format!(" (AI session: {})", s))
+                        .unwrap_or_default(),
                     step_info,
                 ),
             },
         });
 
-        self.launch_session(id, emit, ai_session_id, resume_step, resume_iteration).await
+        self.launch_session(id, emit, ai_session_id, resume_step, resume_iteration)
+            .await
     }
 
     async fn launch_session(
@@ -211,22 +223,48 @@ impl SessionManager {
         Ok(())
     }
 
-    pub async fn stop_session(&self, id: &SessionId) -> anyhow::Result<()> {
-        let sessions = self.sessions.read().await;
+    pub async fn stop_session(&self, id: &SessionId) -> anyhow::Result<SessionStatus> {
+        let mut sessions = self.sessions.write().await;
         let handle = sessions
-            .get(id)
+            .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
         handle.stop_tx.send(true).ok();
-        Ok(())
+        let status = match &handle.info.status {
+            SessionStatus::Running { step, iteration } => {
+                let stopping = SessionStatus::Stopping {
+                    step: step.clone(),
+                    iteration: *iteration,
+                };
+                handle.info.status = stopping.clone();
+                stopping
+            }
+            other => other.clone(),
+        };
+        drop(sessions);
+        self.persist().await;
+        Ok(status)
     }
 
-    pub async fn cancel_stop_session(&self, id: &SessionId) -> anyhow::Result<()> {
-        let sessions = self.sessions.read().await;
+    pub async fn cancel_stop_session(&self, id: &SessionId) -> anyhow::Result<SessionStatus> {
+        let mut sessions = self.sessions.write().await;
         let handle = sessions
-            .get(id)
+            .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
         handle.stop_tx.send(false).ok();
-        Ok(())
+        let status = match &handle.info.status {
+            SessionStatus::Stopping { step, iteration } => {
+                let running = SessionStatus::Running {
+                    step: step.clone(),
+                    iteration: *iteration,
+                };
+                handle.info.status = running.clone();
+                running
+            }
+            other => other.clone(),
+        };
+        drop(sessions);
+        self.persist().await;
+        Ok(status)
     }
 
     /// Abort a session immediately. Returns the new `Aborted` status so the
@@ -243,7 +281,8 @@ impl SessionManager {
         // Set status to Aborted, preserving the step and iteration
         let status = {
             let mut sessions = self.sessions.write().await;
-            let handle = sessions.get_mut(id)
+            let handle = sessions
+                .get_mut(id)
                 .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
             let (step, iteration) = match &handle.info.status {
                 SessionStatus::Running { step, iteration }
@@ -314,7 +353,9 @@ impl SessionManager {
     /// Handle events from the runner to update persisted state.
     pub async fn handle_event(&self, event: &SessionEvent) {
         let id_str = &event.session_id;
-        let Ok(uuid) = uuid::Uuid::parse_str(id_str) else { return };
+        let Ok(uuid) = uuid::Uuid::parse_str(id_str) else {
+            return;
+        };
         let id = SessionId(uuid);
 
         let mut sessions = self.sessions.write().await;
@@ -324,7 +365,10 @@ impl SessionManager {
                     // Don't let runner's Stopped/Failed overwrite an Aborted status
                     // (abort_session sets Aborted, then the dying runner emits Stopped)
                     // But do allow Running transitions (from resume/start).
-                    let dominated = matches!(status, SessionStatus::Stopped | SessionStatus::Failed { .. });
+                    let dominated = matches!(
+                        status,
+                        SessionStatus::Stopped | SessionStatus::Failed { .. }
+                    );
                     if !(dominated && matches!(handle.info.status, SessionStatus::Aborted { .. })) {
                         handle.info.status = status.clone();
                     }
@@ -360,7 +404,9 @@ impl SessionManager {
                     let tracker = self.iteration_tracker.lock().unwrap();
                     tracker.get(id_str).copied().unwrap_or(1)
                 };
-                self.log_store.append(id_str, iteration, &event.payload).ok();
+                self.log_store
+                    .append(id_str, iteration, &event.payload)
+                    .ok();
             }
             SessionEventPayload::IterationComplete { iteration, .. } => {
                 // Write the IterationComplete event to the current iteration file
@@ -385,5 +431,14 @@ impl SessionManager {
 
     pub fn read_iteration(&self, session_id: &str, iteration: u32) -> Vec<LogRecord> {
         self.log_store.read_iteration(session_id, iteration)
+    }
+
+    pub fn read_iteration_view(
+        &self,
+        session_id: &str,
+        iteration: u32,
+    ) -> Vec<crate::session::view::ViewLogEntry> {
+        let records = self.log_store.read_iteration(session_id, iteration);
+        crate::session::view::records_to_view_entries(&records)
     }
 }
