@@ -43,7 +43,13 @@ pub fn records_to_view_entries(records: &[LogRecord], worktree_prefix: &str) -> 
         match &record.payload {
             SessionEventPayload::Log { category, text } => {
                 id_counter += 1;
-                let short_text = sp(text);
+                // Don't shorten the worktree path log — its purpose is to show
+                // the actual directory.
+                let short_text = if text.starts_with("Running in worktree") {
+                    text.clone()
+                } else {
+                    sp(text)
+                };
                 entries.push(ViewLogEntry {
                     id: id_counter,
                     category: category.clone(),
@@ -182,6 +188,17 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "hello");
         assert!(matches!(entries[0].category, LogCategory::Script));
+    }
+
+    #[test]
+    fn worktree_log_not_shortened() {
+        let text = "Running in worktree: \"/tmp/wt/proj\" (mode: macos, branch: b)".to_string();
+        let records = vec![make_record(SessionEventPayload::Log {
+            category: LogCategory::Script,
+            text: text.clone(),
+        })];
+        let entries = records_to_view_entries(&records, "/tmp/wt/proj");
+        assert_eq!(entries[0].short_text, text, "worktree log must not be shortened");
     }
 
     #[test]

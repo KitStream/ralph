@@ -245,7 +245,7 @@ function applyEvent(
         id: ++logIdCounter,
         category: payload.category,
         text,
-        shortText: shortenPaths(text, wp),
+        shortText: text.startsWith("Running in worktree") ? text : shortenPaths(text, wp),
         timestamp: Date.now(),
       };
       return appendLogEntry(session, entry);
