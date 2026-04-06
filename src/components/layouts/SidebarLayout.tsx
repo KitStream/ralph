@@ -1,6 +1,11 @@
+import { useCallback, useRef, useState } from "react";
 import { SessionList } from "../SessionList";
 import { SessionPanel } from "../SessionPanel";
 import type { SessionState } from "../../lib/types";
+
+const MIN_WIDTH = 120;
+const MAX_WIDTH = 500;
+const DEFAULT_WIDTH = 200;
 
 interface SidebarLayoutProps {
   sessions: SessionState[];
@@ -17,16 +22,47 @@ export function SidebarLayout({
   onNewSession,
   onOpenSettings,
 }: SidebarLayoutProps) {
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
+  const dragging = useRef(false);
+
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragging.current = true;
+
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!dragging.current) return;
+        const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, ev.clientX));
+        setSidebarWidth(newWidth);
+      };
+
+      const onMouseUp = () => {
+        dragging.current = false;
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [],
+  );
+
   return (
     <div style={{ display: "flex", height: "100vh" }}>
       <div
         style={{
-          width: 200,
-          minWidth: 160,
+          width: sidebarWidth,
+          minWidth: MIN_WIDTH,
+          maxWidth: MAX_WIDTH,
           backgroundColor: "var(--bg-primary)",
-          borderRight: "1px solid var(--border-primary)",
           display: "flex",
           flexDirection: "column",
+          flexShrink: 0,
         }}
       >
         <div
@@ -61,10 +97,20 @@ export function SidebarLayout({
         </div>
       </div>
 
+      <div onMouseDown={onMouseDown} style={resizeHandleStyle} />
+
       <SessionPanel sessionId={activeId} />
     </div>
   );
 }
+
+const resizeHandleStyle: React.CSSProperties = {
+  width: 4,
+  cursor: "col-resize",
+  backgroundColor: "transparent",
+  borderRight: "1px solid var(--border-primary)",
+  flexShrink: 0,
+};
 
 const iconBtnStyle: React.CSSProperties = {
   background: "none",
