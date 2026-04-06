@@ -96,9 +96,17 @@ impl AiProvider for ClaudeProvider {
             cmd.arg("--model").arg(m);
         }
 
-        if let Some(id) = resume_session_id {
-            cmd.arg("--resume").arg(id);
+        // Always capture the session ID before spawning so it is stored
+        // even if the process is aborted before emitting a "result" event.
+        let session_id = resume_session_id
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if resume_session_id.is_some() {
+            cmd.arg("--resume").arg(&session_id);
+        } else {
+            cmd.arg("--session-id").arg(&session_id);
         }
+        let _ = output_tx.send(AiOutput::SessionId(session_id));
 
         let mut child = cmd
             .current_dir(working_dir)
