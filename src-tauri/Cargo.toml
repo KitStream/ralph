@@ -1,6 +1,6 @@
 [package]
 name = "ralph-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "Ralph - Autonomous Coding Loop GUI"
 authors = ["you"]
 edition = "2021"
