@@ -37,8 +37,10 @@ SUBMIT_JSON=$(notary submit "$FILE" --output-format json)
 SUBMISSION_ID=$(echo "$SUBMIT_JSON" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 echo "Submission ID: $SUBMISSION_ID"
 
-# Poll up to ~60 minutes, tolerating transient failures
-DEADLINE=$(( $(date +%s) + 3600 ))
+# Poll up to ~2 hours, tolerating transient failures. Apple's notary
+# service normally responds in 2-15 minutes, but has been observed to
+# take over an hour during busy periods.
+DEADLINE=$(( $(date +%s) + 7200 ))
 CONSECUTIVE_ERRORS=0
 MAX_CONSECUTIVE_ERRORS=10
 
