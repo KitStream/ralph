@@ -83,3 +83,24 @@ Events are persisted to disk as JSONL for session replay.
 - The frontend can reliably prefix-match tool paths against `{project_dir}/.ralph/{branch}-worktree` for display shortening
 
 The frontend's `shortenPath` replaces the worktree prefix with `⌂` for compact display. This uses case-insensitive matching with backslash normalization for Windows compatibility.
+
+## Auto-update
+
+Both frontends notify the user when a newer release is published:
+
+- **Desktop** uses `tauri-plugin-updater`. On startup it fetches
+  `https://github.com/KitStream/ralph/releases/latest/download/latest.json`,
+  verifies the bundle signature against the public key in `tauri.conf.json`,
+  and prompts the user to install. `useAppUpdate` (`src/hooks/useAppUpdate.ts`)
+  drives the UI; `UpdateBanner` renders the top-of-window banner; `SettingsDialog`
+  exposes a manual "Check for updates" button.
+- **CLI** (`crates/ralph-cli/src/update_check.rs`) does a fire-and-forget HTTPS
+  request to the GitHub API with a 3 s timeout and prints an upgrade hint to
+  stderr if the latest release tag is numerically greater than the compiled
+  `CARGO_PKG_VERSION`. Failures are silent by design — the check must never
+  affect session execution.
+
+The release workflow (`.github/workflows/release.yml`) builds signed updater
+bundles per platform (`TAURI_SIGNING_PRIVATE_KEY` secret), collects their
+signatures into per-platform JSON fragments, and merges them into a single
+`latest.json` attached to the GitHub Release.

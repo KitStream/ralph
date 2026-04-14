@@ -8,6 +8,7 @@ interface TabsLayoutProps {
   onSelect: (id: string) => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
+  appVersion: string;
 }
 
 export function TabsLayout({
@@ -16,6 +17,7 @@ export function TabsLayout({
   onSelect,
   onNewSession,
   onOpenSettings,
+  appVersion,
 }: TabsLayoutProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -37,6 +39,18 @@ export function TabsLayout({
           +
         </button>
         <div style={{ flex: 1 }} />
+        {appVersion && (
+          <span
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 11,
+              marginRight: 8,
+            }}
+            title="Ralph desktop version"
+          >
+            v{appVersion}
+          </span>
+        )}
         <button onClick={onOpenSettings} style={settingsBtnStyle} title="Settings">
           &#9881;
         </button>

@@ -7,12 +7,14 @@ interface SplitLayoutProps {
   onSelect: (id: string) => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
+  appVersion: string;
 }
 
 export function SplitLayout({
   sessions,
   onNewSession,
   onOpenSettings,
+  appVersion,
 }: SplitLayoutProps) {
   const cols = sessions.length <= 1 ? 1 : sessions.length <= 4 ? 2 : 3;
 
@@ -30,6 +32,18 @@ export function SplitLayout({
       >
         <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14 }}>
           Ralph
+          {appVersion && (
+            <span
+              style={{
+                marginLeft: 6,
+                fontWeight: 400,
+                fontSize: 11,
+                color: "var(--text-muted)",
+              }}
+            >
+              v{appVersion}
+            </span>
+          )}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onNewSession} style={topBtnStyle}>

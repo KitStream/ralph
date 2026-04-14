@@ -83,6 +83,50 @@ Each iteration follows this loop:
 
 Ralph handles crash recovery, rate limiting (automatic pause/resume), and git conflicts (stash and retry) so the loop can run unattended for hours.
 
+## Updates
+
+### Desktop
+
+The desktop app checks GitHub Releases for a new version on startup. When one
+is available, a banner at the top of the window offers **Install and restart**.
+You can also trigger a check manually from **Settings → About → Check for
+updates**. The current version is shown in the window header and in Settings.
+
+Updates are cryptographically signed with a release-time Ed25519 key; the app
+will refuse to install a bundle whose signature doesn't match the public key
+baked into `tauri.conf.json` (`plugins.updater.pubkey`).
+
+### CLI
+
+`ralph` runs a quick (3-second timeout) check against GitHub's releases API at
+startup. If a newer release is available it prints a one-line notice with the
+release URL and upgrade instructions — the running session is never blocked or
+slowed down by the check.
+
+To upgrade, download the binary for your platform from the release page or
+reinstall via:
+
+```bash
+cargo install --git https://github.com/KitStream/ralph ralph-cli
+```
+
+### Maintainer: updater signing key
+
+The desktop updater requires an Ed25519 keypair. Generate it once with:
+
+```bash
+npx tauri signer generate -w ~/.tauri/ralph-updater.key
+```
+
+- Put the **public key** into `src-tauri/tauri.conf.json` under
+  `plugins.updater.pubkey`.
+- Add the **private key** and its passphrase to the repo's GitHub Actions
+  secrets as `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
+Losing the private key is unrecoverable — existing installs can no longer be
+upgraded through the in-app updater and would need a fresh install.
+
 ## Building from source
 
 ```bash

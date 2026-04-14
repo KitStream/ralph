@@ -13,6 +13,7 @@ interface SidebarLayoutProps {
   onSelect: (id: string) => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
+  appVersion: string;
 }
 
 export function SidebarLayout({
@@ -21,6 +22,7 @@ export function SidebarLayout({
   onSelect,
   onNewSession,
   onOpenSettings,
+  appVersion,
 }: SidebarLayoutProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
   const dragging = useRef(false);
@@ -75,7 +77,7 @@ export function SidebarLayout({
           }}
         >
           <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14 }}>
-            Ralph
+            Ralph{appVersion && <span style={versionStyle}>v{appVersion}</span>}
           </span>
           <button onClick={onOpenSettings} style={iconBtnStyle} title="Settings">
             &#9881;
@@ -110,6 +112,13 @@ const resizeHandleStyle: React.CSSProperties = {
   backgroundColor: "transparent",
   borderRight: "1px solid var(--border-primary)",
   flexShrink: 0,
+};
+
+const versionStyle: React.CSSProperties = {
+  marginLeft: 6,
+  fontWeight: 400,
+  fontSize: 11,
+  color: "var(--text-muted)",
 };
 
 const iconBtnStyle: React.CSSProperties = {

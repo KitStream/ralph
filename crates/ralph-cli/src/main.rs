@@ -4,6 +4,8 @@ use std::sync::Arc;
 use clap::Parser;
 use colored::Colorize;
 
+mod update_check;
+
 use ralph_core::discovery::discover_modes;
 use ralph_core::events::{
     AiContentBlock, HousekeepingBlock, LogCategory, RecoveryAction, SessionEvent,
@@ -47,6 +49,10 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    // Kick off an update check in parallel with session setup. The check has
+    // a short timeout and swallows its own errors, so it never blocks startup.
+    let update_task = tokio::spawn(update_check::check_and_notify(env!("CARGO_PKG_VERSION")));
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
     let modes = discover_modes(&[cwd.as_path()]);
@@ -158,6 +164,9 @@ async fn main() {
         None, // No resume iteration
     )
     .await;
+
+    // Give the update check a final moment to report before we exit.
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(100), update_task).await;
 
     if abort_flag.load(Ordering::SeqCst) {
         std::process::exit(130);

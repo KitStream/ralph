@@ -98,7 +98,11 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Option<std::process:
     loop {
         match child.try_wait().ok()? {
             Some(status) => {
-                let stdout = rx.recv_timeout(Duration::from_millis(200)).ok().flatten().unwrap_or_default();
+                let stdout = rx
+                    .recv_timeout(Duration::from_millis(200))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 return Some(std::process::Output {
                     status,
                     stdout,

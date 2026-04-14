@@ -8,13 +8,25 @@ import type {
   ThemeMode,
   ToolPathInfo,
 } from "../lib/types";
+import type { UpdateStatus } from "../hooks/useAppUpdate";
 
 interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
+  appVersion: string;
+  updateStatus: UpdateStatus;
+  onCheckForUpdate: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
 }
 
-export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+export function SettingsDialog({
+  open,
+  onClose,
+  appVersion,
+  updateStatus,
+  onCheckForUpdate,
+  onInstallUpdate,
+}: SettingsDialogProps) {
   const { state, updateSettings } = useSessions();
   const [settings, setSettings] = useState<AppSettings>(state.settings);
   const [toolPathInfos, setToolPathInfos] = useState<ToolPathInfo[]>([]);
@@ -365,6 +377,64 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               </div>
             </div>
           )}
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>About</label>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              fontSize: 12,
+              color: "var(--text-primary)",
+            }}
+          >
+            <span>Version {appVersion || "?"}</span>
+            <button
+              type="button"
+              onClick={() => {
+                void onCheckForUpdate();
+              }}
+              disabled={
+                updateStatus.kind === "checking" ||
+                updateStatus.kind === "downloading"
+              }
+              style={browseBtnStyle}
+            >
+              {updateStatus.kind === "checking"
+                ? "Checking…"
+                : "Check for updates"}
+            </button>
+            {updateStatus.kind === "available" && (
+              <button
+                type="button"
+                onClick={() => {
+                  void onInstallUpdate();
+                }}
+                style={saveBtnStyle}
+              >
+                Install v{updateStatus.version}
+              </button>
+            )}
+          </div>
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11,
+              color: "var(--text-secondary)",
+            }}
+          >
+            {updateStatus.kind === "upToDate" && "You're on the latest version."}
+            {updateStatus.kind === "downloading" &&
+              (updateStatus.total && updateStatus.total > 0
+                ? `Downloading… ${Math.round(
+                    (updateStatus.downloaded / updateStatus.total) * 100,
+                  )}%`
+                : "Downloading…")}
+            {updateStatus.kind === "ready" && "Update installed. Restarting…"}
+            {updateStatus.kind === "error" && `Error: ${updateStatus.message}`}
+          </div>
         </div>
 
         <div
