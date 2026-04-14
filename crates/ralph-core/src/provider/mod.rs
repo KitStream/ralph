@@ -3,12 +3,45 @@ pub mod codex;
 pub mod copilot;
 pub mod cursor;
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 
 use crate::events::ToolInvocation;
+
+fn tool_path_overrides() -> &'static RwLock<HashMap<String, String>> {
+    static OVERRIDES: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    OVERRIDES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Replace the global per-tool binary path overrides. Empty values are ignored.
+/// Tool IDs should match the short CLI command name (e.g., "claude", "codex",
+/// "copilot", "cursor-agent").
+pub fn set_tool_path_overrides(overrides: HashMap<String, String>) {
+    let filtered = overrides
+        .into_iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .collect();
+    if let Ok(mut guard) = tool_path_overrides().write() {
+        *guard = filtered;
+    }
+}
+
+/// Resolve the binary to invoke for a given tool id. Falls back to the bare
+/// command so the OS-level PATH lookup still runs when there is no override.
+pub fn resolve_tool_command(tool_id: &str, default_cmd: &str) -> String {
+    if let Ok(guard) = tool_path_overrides().read() {
+        if let Some(path) = guard.get(tool_id) {
+            if !path.trim().is_empty() {
+                return path.clone();
+            }
+        }
+    }
+    default_cmd.to_string()
+}
 
 /// Output from an AI tool process.
 #[derive(Debug, Clone)]

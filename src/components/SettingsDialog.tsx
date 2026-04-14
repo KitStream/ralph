@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSessions } from "../hooks/useSessions";
-import type { AppSettings, LayoutMode, ThemeMode } from "../lib/types";
+import * as commands from "../lib/commands";
+import type {
+  AppSettings,
+  LayoutMode,
+  ThemeMode,
+  ToolPathInfo,
+} from "../lib/types";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -10,12 +17,59 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const { state, updateSettings } = useSessions();
   const [settings, setSettings] = useState<AppSettings>(state.settings);
+  const [toolPathInfos, setToolPathInfos] = useState<ToolPathInfo[]>([]);
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   useEffect(() => {
     setSettings(state.settings);
   }, [state.settings]);
 
+  useEffect(() => {
+    if (!open) return;
+    commands.detectToolPaths().then(setToolPathInfos).catch(() => {});
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
+
+  const setToolPath = (id: string, value: string) => {
+    const next = { ...(settings.tool_paths ?? {}) };
+    if (value.trim() === "") {
+      delete next[id];
+    } else {
+      next[id] = value;
+    }
+    setSettings({ ...settings, tool_paths: next });
+  };
+
+  const browseToolPath = async (id: string) => {
+    const picked = await openDialog({
+      multiple: false,
+      directory: false,
+      title: `Select binary for ${id}`,
+    });
+    if (typeof picked === "string" && picked) {
+      setToolPath(id, picked);
+    }
+  };
+
+  const toolLabels: Record<string, string> = {
+    claude: "Claude",
+    codex: "Codex",
+    copilot: "Copilot",
+    cursor: "Cursor",
+  };
 
   const handleSave = async () => {
     await updateSettings(settings);
@@ -180,6 +234,139 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           </label>
         </div>
 
+        <div style={fieldStyle}>
+          <button
+            type="button"
+            onClick={() => setToolsOpen((v) => !v)}
+            style={flipperHeaderStyle}
+            aria-expanded={toolsOpen}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                width: 12,
+                transform: toolsOpen ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 120ms ease",
+              }}
+            >
+              ▶
+            </span>
+            <span>Tools</span>
+          </button>
+          {toolsOpen && (
+            <div style={{ marginTop: 8 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-secondary)",
+                  marginBottom: 8,
+                }}
+              >
+                Leave blank to use the auto-detected path. Override only if the
+                CLI is installed in a non-standard location.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {(["claude", "codex", "copilot", "cursor"] as const).map((id) => {
+                  const info = toolPathInfos.find((t) => t.id === id);
+                  const detected = info?.detected_path ?? null;
+                  const cmd = info?.command ?? id;
+                  const value = settings.tool_paths?.[id] ?? "";
+                  return (
+                    <div
+                      key={id}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 70,
+                            fontSize: 12,
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {toolLabels[id]}
+                        </span>
+                        <input
+                          type="text"
+                          readOnly={false}
+                          spellCheck={false}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          style={{
+                            ...inputStyle,
+                            flex: 1,
+                            userSelect: "text",
+                            WebkitUserSelect: "text",
+                          }}
+                          placeholder={
+                            detected ?? `not detected (${cmd})`
+                          }
+                          value={value}
+                          onChange={(e) => setToolPath(id, e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => browseToolPath(id)}
+                          style={browseBtnStyle}
+                        >
+                          Browse…
+                        </button>
+                      </div>
+                      <div
+                        style={{
+                          marginLeft: 76,
+                          fontSize: 11,
+                          color: "var(--text-secondary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          userSelect: "text",
+                          WebkitUserSelect: "text",
+                        }}
+                      >
+                        <span>Detected:</span>
+                        <code
+                          style={{
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, monospace",
+                            color: detected
+                              ? "var(--text-primary)"
+                              : "var(--accent-red, #e06c75)",
+                            userSelect: "text",
+                            WebkitUserSelect: "text",
+                          }}
+                        >
+                          {detected ?? `not found on PATH (${cmd})`}
+                        </code>
+                        {detected && (
+                          <button
+                            type="button"
+                            onClick={() => setToolPath(id, detected)}
+                            style={linkBtnStyle}
+                          >
+                            use
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
         <div
           style={{
             display: "flex",
@@ -218,7 +405,7 @@ const dialogStyle: React.CSSProperties = {
   border: "1px solid var(--border-primary)",
   borderRadius: 8,
   padding: 24,
-  width: 420,
+  width: 560,
   maxHeight: "90vh",
   overflow: "auto",
 };
@@ -251,6 +438,41 @@ const cancelBtnStyle: React.CSSProperties = {
   borderRadius: 6,
   cursor: "pointer",
   fontSize: 13,
+};
+
+const flipperHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  width: "100%",
+  padding: "6px 0",
+  background: "transparent",
+  border: "none",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  fontWeight: 500,
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const linkBtnStyle: React.CSSProperties = {
+  padding: "2px 6px",
+  background: "transparent",
+  color: "var(--accent-blue)",
+  border: "1px solid var(--border-primary)",
+  borderRadius: 4,
+  cursor: "pointer",
+  fontSize: 11,
+};
+
+const browseBtnStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  backgroundColor: "var(--bg-tertiary)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-primary)",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: 12,
 };
 
 const saveBtnStyle: React.CSSProperties = {

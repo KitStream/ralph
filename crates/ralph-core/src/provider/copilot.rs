@@ -101,7 +101,7 @@ impl AiProvider for CopilotProvider {
     ) -> anyhow::Result<()> {
         let start = Instant::now();
 
-        let mut cmd = Command::new("copilot");
+        let mut cmd = Command::new(super::resolve_tool_command("copilot", "copilot"));
         cmd.arg("-p")
             .arg(prompt)
             .arg("--allow-all")

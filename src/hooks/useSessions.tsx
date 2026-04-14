@@ -363,6 +363,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       default_mode: "",
       default_preamble: "",
       tool_output_preview_lines: 2,
+      tool_paths: {},
     },
   });
 

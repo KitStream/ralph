@@ -84,7 +84,7 @@ impl AiProvider for ClaudeProvider {
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        let mut cmd = Command::new("claude");
+        let mut cmd = Command::new(super::resolve_tool_command("claude", "claude"));
         cmd.arg("-p")
             .arg(prompt)
             .arg("--dangerously-skip-permissions")

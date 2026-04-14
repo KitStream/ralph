@@ -202,21 +202,35 @@ pub fn shorten_paths(text: &str, prefix: &str) -> String {
     }
 
     let norm_text: String = text.replace('\\', "/");
-    let mut result = String::with_capacity(text.len());
-    let mut i = 0;
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    let (cmp_text, cmp_prefix) = (norm_text.to_lowercase(), norm_prefix.to_lowercase());
+    let case_insensitive = true;
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let (cmp_text, cmp_prefix) = (norm_text.clone(), norm_prefix.to_string());
+    let case_insensitive = false;
 
-    while i < text.len() {
-        if cmp_text[i..].starts_with(&cmp_prefix) {
-            result.push('\u{2302}');
-            i += norm_prefix.len();
+    let matches_prefix_at = |s: &str| -> bool {
+        if case_insensitive {
+            let s_lower: String = s.chars().take(norm_prefix.chars().count()).collect::<String>().to_lowercase();
+            let p_lower: String = norm_prefix.to_lowercase();
+            s_lower == p_lower
         } else {
-            // Use the original character (preserve original casing/separators)
-            result.push(text.as_bytes()[i] as char);
+            s.starts_with(norm_prefix)
+        }
+    };
+
+    let prefix_char_len = norm_prefix.chars().count();
+    let mut result = String::with_capacity(text.len());
+    let text_chars: Vec<(usize, char)> = text.char_indices().collect();
+    let norm_chars: Vec<(usize, char)> = norm_text.char_indices().collect();
+    let mut i = 0;
+
+    while i < text_chars.len() {
+        let norm_rest_byte = norm_chars[i].0;
+        if matches_prefix_at(&norm_text[norm_rest_byte..]) {
+            result.push('\u{2302}');
+            i += prefix_char_len;
+        } else {
+            result.push(text_chars[i].1);
             i += 1;
         }
     }

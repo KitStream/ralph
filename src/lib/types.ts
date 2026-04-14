@@ -132,6 +132,13 @@ export interface AppSettings {
   default_mode: string;
   default_preamble: string;
   tool_output_preview_lines: number;
+  tool_paths: Record<string, string>;
+}
+
+export interface ToolPathInfo {
+  id: string;
+  command: string;
+  detected_path: string | null;
 }
 
 export type LayoutMode = "Sidebar" | "Tabs" | "Split";

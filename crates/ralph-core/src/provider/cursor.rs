@@ -19,7 +19,7 @@ impl AiProvider for CursorProvider {
 
     async fn list_models(&self) -> BackendModelConfig {
         // Try to dynamically discover models via cursor-agent --list-models
-        match Command::new("cursor-agent")
+        match Command::new(super::resolve_tool_command("cursor", "cursor-agent"))
             .arg("--list-models")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -82,7 +82,7 @@ impl AiProvider for CursorProvider {
     ) -> anyhow::Result<()> {
         let start = Instant::now();
 
-        let mut cmd = Command::new("cursor-agent");
+        let mut cmd = Command::new(super::resolve_tool_command("cursor", "cursor-agent"));
         cmd.arg("-p")
             .arg("--yolo")
             .arg("--output-format")
