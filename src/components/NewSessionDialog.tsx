@@ -43,6 +43,18 @@ export function NewSessionDialog({
     getAvailableTools().then(setTools);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
+
   // Reset form defaults when dialog opens or settings load
   useEffect(() => {
     if (isOpen) {
@@ -103,6 +115,7 @@ export function NewSessionDialog({
   const handleCreate = async () => {
     const mode = modes.find((m) => m.name === selectedMode);
     if (!mode) return;
+    if (autoStart && !toolAvailable) return;
 
     const selectedModel = useCustom ? (customModel || null) : model;
     const id = await createSession({
@@ -124,7 +137,12 @@ export function NewSessionDialog({
     onClose();
   };
 
-  const canCreate = projectDir && selectedMode && branchName;
+  const selectedToolInfo = tools.find((t) => t.id === aiTool);
+  const toolAvailable = selectedToolInfo?.available ?? false;
+  const toolBlocksStart = autoStart && !toolAvailable;
+  const canCreate = Boolean(
+    projectDir && selectedMode && branchName && !toolBlocksStart
+  );
 
   return (
     <div style={overlayStyle}>
@@ -219,6 +237,19 @@ export function NewSessionDialog({
               </option>
             ))}
           </select>
+          {!toolAvailable && selectedToolInfo && (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11,
+                color: "var(--accent-red, #e06c75)",
+              }}
+            >
+              {selectedToolInfo.name} was not detected on PATH. Configure its
+              binary path in Settings → Tool Binary Paths, or install the CLI,
+              before starting a session.
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 12 }}>

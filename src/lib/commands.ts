@@ -7,6 +7,7 @@ import type {
   AppSettings,
   IterationSummary,
   LogEntry,
+  ToolPathInfo,
 } from "./types";
 
 export interface CreateSessionRequest {
@@ -61,6 +62,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
 export async function getAvailableTools(): Promise<AiToolInfo[]> {
   return invoke("get_available_tools");
+}
+
+export async function detectToolPaths(): Promise<ToolPathInfo[]> {
+  return invoke("detect_tool_paths");
 }
 
 export async function listBackendModels(tool: string): Promise<BackendModelConfig> {

@@ -1,4 +1,5 @@
 mod commands;
+mod path_env;
 mod settings;
 
 use ralph_core::session::manager::SessionManager;
@@ -6,6 +7,8 @@ use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    path_env::augment_path_for_gui_launch();
+    settings::apply_tool_path_overrides(&settings::load_settings());
     let manager = Arc::new(SessionManager::new());
     tauri::Builder::default()
         .manage(manager)
@@ -24,6 +27,7 @@ pub fn run() {
             commands::read_log_iteration,
             commands::read_log_iteration_view,
             commands::get_available_tools,
+            commands::detect_tool_paths,
             commands::list_backend_models,
             commands::resume_session,
             commands::send_recovery_action,

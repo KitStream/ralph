@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +20,10 @@ pub struct AppSettings {
     pub default_preamble: String,
     #[serde(default = "default_tool_output_preview_lines")]
     pub tool_output_preview_lines: u32,
+    /// Per-tool binary path overrides keyed by tool id
+    /// ("claude", "codex", "copilot", "cursor"). Empty strings mean "use PATH".
+    #[serde(default)]
+    pub tool_paths: HashMap<String, String>,
 }
 
 fn default_tool_output_preview_lines() -> u32 {
@@ -54,8 +60,15 @@ impl Default for AppSettings {
             default_mode: String::new(),
             default_preamble: String::new(),
             tool_output_preview_lines: 2,
+            tool_paths: HashMap::new(),
         }
     }
+}
+
+/// Push the tool path overrides from settings into the ralph-core provider
+/// registry so spawned backends see them.
+pub fn apply_tool_path_overrides(settings: &AppSettings) {
+    ralph_core::provider::set_tool_path_overrides(settings.tool_paths.clone());
 }
 
 fn settings_path() -> std::path::PathBuf {
@@ -95,5 +108,7 @@ pub fn get_settings() -> AppSettings {
 
 #[tauri::command]
 pub fn update_settings(settings: AppSettings) -> Result<(), String> {
-    save_settings(&settings)
+    save_settings(&settings)?;
+    apply_tool_path_overrides(&settings);
+    Ok(())
 }

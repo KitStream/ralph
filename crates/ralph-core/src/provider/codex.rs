@@ -101,7 +101,7 @@ impl AiProvider for CodexProvider {
         output_tx: mpsc::UnboundedSender<AiOutput>,
         mut abort: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        let mut cmd = Command::new("codex");
+        let mut cmd = Command::new(super::resolve_tool_command("codex", "codex"));
 
         if let Some(id) = resume_session_id {
             cmd.args(["exec", "resume"])

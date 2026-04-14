@@ -83,6 +83,24 @@ pub async fn create_session(
     Ok(id.to_string())
 }
 
+fn ensure_tool_available(tool: &AiTool) -> Result<(), String> {
+    let (id, default_cmd) = match tool {
+        AiTool::Claude => ("claude", "claude"),
+        AiTool::Codex => ("codex", "codex"),
+        AiTool::Copilot => ("copilot", "copilot"),
+        AiTool::Cursor => ("cursor", "cursor-agent"),
+    };
+    if tool_available(id, default_cmd) {
+        Ok(())
+    } else {
+        Err(format!(
+            "The '{}' CLI was not detected. Install it or set an explicit \
+             binary path in Settings → Tool Binary Paths before starting a session.",
+            default_cmd
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn start_session(
     manager: State<'_, Arc<SessionManager>>,
@@ -90,6 +108,11 @@ pub async fn start_session(
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
+    let info = manager
+        .get_session(&id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+    ensure_tool_available(&info.config.ai_tool)?;
     let emit = make_emit(app, manager.inner().clone());
     manager
         .start_session(&id, emit)
@@ -104,6 +127,11 @@ pub async fn resume_session(
     session_id: String,
 ) -> Result<(), String> {
     let id = parse_session_id(&session_id)?;
+    let info = manager
+        .get_session(&id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+    ensure_tool_available(&info.config.ai_tool)?;
     let emit = make_emit(app, manager.inner().clone());
     manager
         .resume_session(&id, emit)
@@ -228,28 +256,64 @@ fn is_on_path(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
+#[derive(Debug, Serialize)]
+pub struct ToolPathInfo {
+    pub id: String,
+    pub command: String,
+    pub detected_path: Option<String>,
+}
+
+#[tauri::command]
+pub fn detect_tool_paths() -> Vec<ToolPathInfo> {
+    let entries = [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("copilot", "copilot"),
+        ("cursor", "cursor-agent"),
+    ];
+    entries
+        .iter()
+        .map(|(id, cmd)| ToolPathInfo {
+            id: (*id).to_string(),
+            command: (*cmd).to_string(),
+            detected_path: which::which(cmd)
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned()),
+        })
+        .collect()
+}
+
+fn tool_available(tool_id: &str, default_cmd: &str) -> bool {
+    let resolved = ralph_core::provider::resolve_tool_command(tool_id, default_cmd);
+    if resolved != default_cmd {
+        std::path::Path::new(&resolved).is_file()
+    } else {
+        is_on_path(default_cmd)
+    }
+}
+
 #[tauri::command]
 pub fn get_available_tools() -> Vec<AiToolInfo> {
     vec![
         AiToolInfo {
             id: "claude".to_string(),
             name: "Claude".to_string(),
-            available: is_on_path("claude"),
+            available: tool_available("claude", "claude"),
         },
         AiToolInfo {
             id: "codex".to_string(),
             name: "Codex".to_string(),
-            available: is_on_path("codex"),
+            available: tool_available("codex", "codex"),
         },
         AiToolInfo {
             id: "copilot".to_string(),
             name: "Copilot".to_string(),
-            available: is_on_path("copilot"),
+            available: tool_available("copilot", "copilot"),
         },
         AiToolInfo {
             id: "cursor".to_string(),
             name: "Cursor".to_string(),
-            available: is_on_path("cursor-agent"),
+            available: tool_available("cursor", "cursor-agent"),
         },
     ]
 }
