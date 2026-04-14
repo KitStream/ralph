@@ -127,6 +127,22 @@ npx tauri signer generate -w ~/.tauri/ralph-updater.key
 Losing the private key is unrecoverable — existing installs can no longer be
 upgraded through the in-app updater and would need a fresh install.
 
+### Maintainer: cutting a release
+
+1. Bump the version in **all four** files (they must match):
+   - `src-tauri/Cargo.toml` (canonical source)
+   - `crates/ralph-cli/Cargo.toml`
+   - `src-tauri/tauri.conf.json`
+   - `package.json`
+2. Commit and push to `main`. The release workflow will:
+   - verify the four version strings agree (fail CI otherwise),
+   - tag the commit as `release-X.Y.Z` if that tag doesn't already exist,
+   - build and sign the CLI + desktop bundles,
+   - publish them + `latest.json` to a GitHub Release.
+
+Pushing a `release-X.Y.Z` tag by hand also works and skips the version-change
+detection — useful for re-running a release.
+
 ## Building from source
 
 ```bash

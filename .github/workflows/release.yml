@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags:
       - "release-[0-9]+.[0-9]+.[0-9]+*"
 
@@ -9,7 +10,80 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+      should_release: ${{ steps.decide.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version and tag
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          extract_toml_version() {
+            # Read the first `version = "X.Y.Z"` line from the [package] table.
+            awk -F'"' '/^version = /{print $2; exit}' "$1"
+          }
+
+          DESKTOP_VER=$(extract_toml_version src-tauri/Cargo.toml)
+          CLI_VER=$(extract_toml_version crates/ralph-cli/Cargo.toml)
+          CONF_VER=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          PKG_VER=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+
+          # src-tauri/Cargo.toml is canonical. Every other version string must
+          # agree, otherwise the built artifacts would misrepresent themselves
+          # and the updater's latest.json would disagree with the installed
+          # binary's reported version.
+          fail=0
+          for pair in "src-tauri/Cargo.toml=$DESKTOP_VER" \
+                      "crates/ralph-cli/Cargo.toml=$CLI_VER" \
+                      "src-tauri/tauri.conf.json=$CONF_VER" \
+                      "package.json=$PKG_VER"; do
+            file="${pair%%=*}"
+            ver="${pair#*=}"
+            if [[ "$ver" != "$DESKTOP_VER" ]]; then
+              echo "::error file=$file::version mismatch: $file is '$ver', expected '$DESKTOP_VER' (from src-tauri/Cargo.toml)"
+              fail=1
+            fi
+          done
+          if [[ "$fail" -eq 1 ]]; then
+            exit 1
+          fi
+
+          VERSION="$DESKTOP_VER"
+          TAG="release-${VERSION}"
+
+          if [[ "$GITHUB_REF" == refs/tags/release-* ]]; then
+            # Direct tag push — build + release unconditionally.
+            SHOULD_RELEASE=true
+          else
+            # Push to main — only release if this version hasn't been tagged.
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "Tag $TAG already exists — version unchanged, skipping release"
+              SHOULD_RELEASE=false
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag -a "$TAG" -m "Release $VERSION"
+              git push origin "$TAG"
+              SHOULD_RELEASE=true
+            fi
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+
   build-cli:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -113,6 +187,8 @@ jobs:
           path: ${{ matrix.artifact }}${{ runner.os == 'Windows' && '.exe' || '' }}
 
   build-desktop:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -193,12 +269,12 @@ jobs:
       - name: Collect updater metadata
         shell: bash
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           BUNDLE_DIR: target/${{ matrix.target }}/release/bundle
           UPDATER_PLATFORM: ${{ matrix.updater_platform }}
         run: |
           set -euo pipefail
-          VERSION="${TAG_NAME#release-}"
           # Find the updater bundle + its .sig produced by Tauri. Each OS
           # has exactly one updater target: .app.tar.gz (mac), .nsis .exe
           # (windows), .AppImage (linux).
@@ -251,38 +327,35 @@ jobs:
           path: updater-meta/*.json
 
   release:
-    needs: [build-cli, build-desktop]
+    needs: [prepare, build-cli, build-desktop]
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#release-}" >> $GITHUB_OUTPUT
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - name: Assemble updater latest.json
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           python3 - <<PY
           import json, glob, os
           platforms = {}
-          version = None
+          version = os.environ["VERSION"]
           for path in glob.glob("artifacts/updater-meta-*/*.json"):
               with open(path) as f:
                   meta = json.load(f)
-              version = meta["version"]
               platforms[meta["platform"]] = {
                   "signature": meta["signature"],
                   "url": meta["url"],
               }
           out = {
-              "version": version or "$VERSION",
+              "version": version,
               "notes": "See release notes on GitHub.",
               "pub_date": "$PUB_DATE",
               "platforms": platforms,
@@ -296,7 +369,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: v${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           body: |
             ## macOS notes
