@@ -114,6 +114,37 @@ export function LogView({
     }
   }, [totalEntries, displayList.length, virtualizer]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey || e.shiftKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      const cmdOnly = e.metaKey && !e.ctrlKey;
+      const ctrlOnly = e.ctrlKey && !e.metaKey;
+      const noMods = !e.metaKey && !e.ctrlKey;
+      let direction: "top" | "bottom" | null = null;
+      if (cmdOnly && e.key === "ArrowUp") direction = "top";
+      else if (cmdOnly && e.key === "ArrowDown") direction = "bottom";
+      else if ((ctrlOnly || noMods) && e.key === "Home") direction = "top";
+      else if ((ctrlOnly || noMods) && e.key === "End") direction = "bottom";
+      else return;
+      e.preventDefault();
+      if (displayList.length === 0) return;
+      if (direction === "top") {
+        autoScrollRef.current = false;
+        virtualizer.scrollToIndex(0, { align: "start" });
+      } else {
+        autoScrollRef.current = true;
+        virtualizer.scrollToIndex(displayList.length - 1, { align: "end" });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [virtualizer, displayList.length]);
+
   const handleScroll = useCallback(() => {
     const el = parentRef.current;
     if (!el) return;

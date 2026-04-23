@@ -70,6 +70,13 @@ npm run tauri build
 
 The desktop app lets you run multiple sessions concurrently, monitor live AI output, and manage sessions with start/stop/resume controls.
 
+**Log-view shortcuts:**
+
+| macOS | Windows / Linux | Action |
+|-------|-----------------|--------|
+| ⌘↑ or Home | Ctrl+Home or Home | Scroll to top of the log and stop auto-follow |
+| ⌘↓ or End | Ctrl+End or End | Scroll to bottom and resume auto-follow |
+
 ## How it works
 
 Each iteration follows this loop:
