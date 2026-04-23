@@ -60,11 +60,20 @@ pub async fn discover_modes(project_dir: String) -> Result<Vec<ModeInfo>, String
         .collect())
 }
 
+#[derive(Debug, Serialize)]
+pub struct CreatedSession {
+    pub id: String,
+    /// Canonical project_dir (tilde-expanded, symlinks resolved).
+    /// Returned so the frontend's in-memory session state matches what
+    /// the backend stored, which is the prefix used in emitted log paths.
+    pub project_dir: String,
+}
+
 #[tauri::command]
 pub async fn create_session(
     manager: State<'_, Arc<SessionManager>>,
     request: CreateSessionRequest,
-) -> Result<String, String> {
+) -> Result<CreatedSession, String> {
     let ai_tool: AiTool = request.ai_tool.parse().map_err(|e: String| e)?;
 
     let config = SessionConfig {
@@ -79,8 +88,12 @@ pub async fn create_session(
         model: request.model,
     };
 
+    let project_dir = config.project_dir.to_string_lossy().to_string();
     let id = manager.create_session(config).await;
-    Ok(id.to_string())
+    Ok(CreatedSession {
+        id: id.to_string(),
+        project_dir,
+    })
 }
 
 fn ensure_tool_available(tool: &AiTool) -> Result<(), String> {

@@ -26,9 +26,14 @@ export async function discoverModes(projectDir: string): Promise<ModeInfo[]> {
   return invoke("discover_modes", { projectDir });
 }
 
+export interface CreatedSession {
+  id: string;
+  project_dir: string;
+}
+
 export async function createSession(
   request: CreateSessionRequest
-): Promise<string> {
+): Promise<CreatedSession> {
   return invoke("create_session", { request });
 }
 

@@ -436,11 +436,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
 
   const createSessionFn = useCallback(
     async (req: commands.CreateSessionRequest) => {
-      const id = await commands.createSession(req);
+      const { id, project_dir } = await commands.createSession(req);
       const session = makeEmptySessionState(
         id,
         {
-          project_dir: req.project_dir,
+          project_dir,
           mode: req.mode,
           prompt_file: req.prompt_file,
           branch_name: req.branch_name,
