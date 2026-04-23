@@ -210,7 +210,11 @@ pub fn shorten_paths(text: &str, prefix: &str) -> String {
 
     let matches_prefix_at = |s: &str| -> bool {
         if case_insensitive {
-            let s_lower: String = s.chars().take(norm_prefix.chars().count()).collect::<String>().to_lowercase();
+            let s_lower: String = s
+                .chars()
+                .take(norm_prefix.chars().count())
+                .collect::<String>()
+                .to_lowercase();
             let p_lower: String = norm_prefix.to_lowercase();
             s_lower == p_lower
         } else {

@@ -198,7 +198,10 @@ mod tests {
             text: text.clone(),
         })];
         let entries = records_to_view_entries(&records, "/tmp/wt/proj");
-        assert_eq!(entries[0].short_text, text, "worktree log must not be shortened");
+        assert_eq!(
+            entries[0].short_text, text,
+            "worktree log must not be shortened"
+        );
     }
 
     #[test]
