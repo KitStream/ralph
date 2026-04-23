@@ -28,6 +28,7 @@ impl AiProvider for ClaudeProvider {
     }
 
     async fn list_models(&self) -> BackendModelConfig {
+        const DEFAULT_MODEL: &str = "claude-opus-4-7";
         let current = read_claude_current_model();
         let mut models = vec![
             ModelInfo {
@@ -36,8 +37,13 @@ impl AiProvider for ClaudeProvider {
                 is_default: false,
             },
             ModelInfo {
-                id: "opus".into(),
-                label: "Opus".into(),
+                id: "claude-opus-4-7".into(),
+                label: "Opus 4.7".into(),
+                is_default: false,
+            },
+            ModelInfo {
+                id: "claude-opus-4-6".into(),
+                label: "Opus 4.6".into(),
                 is_default: false,
             },
             ModelInfo {
@@ -59,17 +65,18 @@ impl AiProvider for ClaudeProvider {
         } else {
             false
         };
-        // If no match (e.g. full model name like "claude-sonnet-4-6"), default to opus
+        // If no match (e.g. full model name like "claude-sonnet-4-6" or the
+        // legacy "opus" alias), default to the newest Opus.
         if !matched {
             for m in &mut models {
-                if m.id == "opus" {
+                if m.id == DEFAULT_MODEL {
                     m.is_default = true;
                     break;
                 }
             }
         }
         BackendModelConfig {
-            current_model: current.or_else(|| Some("opus".into())),
+            current_model: current.or_else(|| Some(DEFAULT_MODEL.into())),
             models,
             supports_freeform: true,
         }
