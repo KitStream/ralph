@@ -342,6 +342,13 @@ impl<'a> SessionMachine<'a> {
         let provider_clone = self.provider.clone();
         let model_clone = self.config.model.clone();
 
+        self.emit_agent_args_log(
+            "AI",
+            model_clone.as_deref(),
+            resume_id.as_deref(),
+            &working_dir,
+        );
+
         let ai_task = tokio::spawn(async move {
             provider_clone
                 .run(
@@ -800,6 +807,8 @@ impl<'a> SessionMachine<'a> {
         let working_dir = self.git.worktree_dir();
         let provider_clone = self.provider.clone();
 
+        self.emit_agent_args_log("Commit agent", None, None, &working_dir);
+
         let commit_task = tokio::spawn(async move {
             provider_clone
                 .run(
@@ -917,6 +926,30 @@ impl<'a> SessionMachine<'a> {
         self.emit_event(SessionEventPayload::StatusChanged { status });
     }
 
+    /// Log the non-prompt arguments we hand to an AI agent invocation —
+    /// the tool, the model, the resume id, and the working directory. The
+    /// prompt itself is omitted (it's already emitted as a Prompt log line
+    /// where it matters, and inlining it here would dwarf the other args).
+    fn emit_agent_args_log(
+        &self,
+        label: &str,
+        model: Option<&str>,
+        resume_id: Option<&str>,
+        working_dir: &std::path::Path,
+    ) {
+        self.emit_log(
+            LogCategory::Script,
+            format!(
+                "{} args: tool={} model={} resume={} cwd={}",
+                label,
+                self.config.ai_tool,
+                model.unwrap_or("<default>"),
+                resume_id.unwrap_or("<none>"),
+                working_dir.display(),
+            ),
+        );
+    }
+
     // ── Fetch main with recovery ────────────────────────────────────────
 
     async fn fetch_main_with_recovery(&mut self) {
@@ -972,6 +1005,10 @@ impl<'a> SessionMachine<'a> {
         self.git.abort_rebase().await.ok();
 
         let main_branch = self.config.main_branch.clone();
+        self.emit_log(
+            LogCategory::Script,
+            format!("Running agentic rebase onto origin/{}...", main_branch),
+        );
         let prompt = format!(
             "Rebase the current branch onto origin/{branch}.\n\n\
              Run `git rebase origin/{branch}` from the current working directory. \
@@ -1021,6 +1058,8 @@ impl<'a> SessionMachine<'a> {
         let abort_clone = self.abort_rx.clone();
         let working_dir = self.git.worktree_dir();
         let provider_clone = self.provider.clone();
+
+        self.emit_agent_args_log(label, None, None, &working_dir);
 
         let task = tokio::spawn(async move {
             provider_clone
@@ -1134,6 +1173,8 @@ impl<'a> SessionMachine<'a> {
         let abort_clone = self.abort_rx.clone();
         let working_dir = self.git.worktree_dir();
         let provider_clone = self.provider.clone();
+
+        self.emit_agent_args_log("Git recovery agent", None, None, &working_dir);
 
         let task = tokio::spawn(async move {
             provider_clone
