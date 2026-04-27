@@ -45,20 +45,6 @@ pub struct SessionContext {
     pub last_tag: Option<String>,
 }
 
-#[derive(Debug)]
-enum RunError {
-    Transient(String),
-    Permanent(String),
-}
-
-impl std::fmt::Display for RunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RunError::Transient(e) | RunError::Permanent(e) => write!(f, "{}", e),
-        }
-    }
-}
-
 pub struct SessionMachine<'a> {
     session_id: String,
     config: &'a SessionConfig,
@@ -251,7 +237,7 @@ impl<'a> SessionMachine<'a> {
 
         self.fetch_main_with_recovery().await;
 
-        match self.rebase_with_conflict_resolution().await {
+        match self.rebase_or_delegate_to_ai().await {
             Ok(()) => {
                 if self.ctx.stash_pending {
                     IterationState::StashPop
@@ -259,17 +245,10 @@ impl<'a> SessionMachine<'a> {
                     IterationState::RunningAi
                 }
             }
-            Err(RunError::Permanent(e)) => {
+            Err(e) => {
                 self.emit_log(LogCategory::Error, format!("Pre-AI rebase failed: {}", e));
                 self.ctx.recovery_error = Some(e);
                 IterationState::WaitingForRecovery
-            }
-            Err(RunError::Transient(e)) => {
-                self.emit_log(
-                    LogCategory::Warning,
-                    format!("Pre-AI rebase failed: {}. Retrying next iteration...", e),
-                );
-                IterationState::NewIteration
             }
         }
     }
@@ -543,13 +522,10 @@ impl<'a> SessionMachine<'a> {
 
         self.fetch_main_with_recovery().await;
 
-        if let Err(e) = self.rebase_with_conflict_resolution().await {
-            self.heal_git_state().await;
-            self.emit_log(
-                LogCategory::Warning,
-                format!("Git housekeeping failed: {}. Continuing...", e),
-            );
-            return IterationState::NewIteration;
+        if let Err(e) = self.rebase_or_delegate_to_ai().await {
+            self.emit_log(LogCategory::Error, format!("Post-AI rebase failed: {}", e));
+            self.ctx.recovery_error = Some(e);
+            return IterationState::WaitingForRecovery;
         }
 
         self.emit_event(SessionEventPayload::Housekeeping {
@@ -965,151 +941,150 @@ impl<'a> SessionMachine<'a> {
 
     // ── Git recovery helpers ────────────────────────────────────────────
 
-    async fn rebase_with_conflict_resolution(&mut self) -> Result<(), RunError> {
-        match self.git.rebase_onto_main().await {
+    /// Try to rebase onto origin/main. On any failure, abort the rebase, hand
+    /// the task to an AI agent, and verify the result. The agent gets the
+    /// full task ("Rebase onto origin/<base>") rather than a partial state to
+    /// patch up, so it can choose how to resolve conflicts and commit them.
+    /// If the agent can't produce a clean rebase, surface the failure to the
+    /// caller — `do_rebase_pre_ai` / `do_rebase_post_ai` will route it to the
+    /// user via the multi-choice recovery prompt.
+    async fn rebase_or_delegate_to_ai(&mut self) -> Result<(), String> {
+        let initial_err = match self.git.rebase_onto_main().await {
             Ok(output) => {
                 if !output.trim().is_empty() {
                     self.emit_log(LogCategory::Git, output);
                 }
-                Ok(())
+                return Ok(());
             }
-            Err(RebaseError::Permanent(e)) => {
-                self.emit_log(
-                    LogCategory::Warning,
-                    format!("Rebase failed (permanent): {} — attempting recovery", e),
-                );
-                self.heal_git_state().await;
-                match self.git.rebase_onto_main().await {
-                    Ok(output) => {
-                        if !output.trim().is_empty() {
-                            self.emit_log(LogCategory::Git, output);
-                        }
-                        return Ok(());
-                    }
-                    Err(_) => {}
-                }
-                self.recover_with_ai(&e).await;
-                match self.git.rebase_onto_main().await {
-                    Ok(output) => {
-                        if !output.trim().is_empty() {
-                            self.emit_log(LogCategory::Git, output);
-                        }
-                        Ok(())
-                    }
-                    Err(RebaseError::Conflict(c)) => {
-                        self.emit_log(
-                            LogCategory::Git,
-                            format!("Rebase conflict after recovery: {}", c),
-                        );
-                        self.git.abort_rebase().await.ok();
-                        Err(RunError::Transient(format!(
-                            "Rebase conflict after recovery: {}",
-                            c
-                        )))
-                    }
-                    Err(RebaseError::Permanent(e2)) => Err(RunError::Permanent(e2)),
-                }
-            }
-            Err(RebaseError::Conflict(error_output)) => {
-                self.emit_log(
-                    LogCategory::Git,
-                    format!("Rebase conflict: {}", error_output),
-                );
+            Err(RebaseError::Conflict(e)) | Err(RebaseError::Permanent(e)) => e,
+        };
 
-                let max_attempts = 5;
-                for attempt in 1..=max_attempts {
+        self.emit_log(
+            LogCategory::Warning,
+            format!(
+                "Rebase failed: {} — aborting and delegating to AI agent",
+                initial_err
+            ),
+        );
+
+        // Always leave a clean slate before the agent runs so it doesn't
+        // inherit a half-applied rebase from our attempt.
+        self.git.abort_rebase().await.ok();
+
+        let main_branch = self.config.main_branch.clone();
+        let prompt = format!(
+            "Rebase the current branch onto origin/{branch}.\n\n\
+             Run `git rebase origin/{branch}` from the current working directory. \
+             If conflicts arise, resolve them, stage the resolved files, and \
+             continue with `git rebase --continue`. When you are done, the \
+             branch must be cleanly rebased on top of origin/{branch}, with \
+             no active rebase state and a clean working tree. If you cannot \
+             complete the rebase, run `git rebase --abort` and exit with a \
+             non-zero status.",
+            branch = main_branch
+        );
+
+        let agent_ok = self.run_one_shot_agent(prompt, "Rebase agent").await;
+
+        let on_target = self.git.verify_main_is_ancestor().await.unwrap_or(false);
+        let no_active_rebase = !self.git.has_active_rebase();
+
+        if agent_ok && on_target && no_active_rebase {
+            return Ok(());
+        }
+
+        // Don't leave a half-applied rebase behind for the recovery prompt.
+        if self.git.has_active_rebase() {
+            self.git.abort_rebase().await.ok();
+        }
+
+        let reason = if !agent_ok {
+            "Rebase agent exited with an error".to_string()
+        } else if self.git.has_active_rebase() {
+            "Rebase agent left an in-progress rebase".to_string()
+        } else if !on_target {
+            format!(
+                "Branch is not rebased onto origin/{} after agent run",
+                main_branch
+            )
+        } else {
+            "Rebase did not complete cleanly".to_string()
+        };
+        Err(reason)
+    }
+
+    /// Run a one-shot AI agent with a custom prompt. Forwards the agent's
+    /// streaming output (text, tool use/results, rate-limit signals) to the
+    /// session log. Returns whether the agent process exited successfully.
+    async fn run_one_shot_agent(&mut self, prompt: String, label: &str) -> bool {
+        let (output_tx, mut output_rx) = mpsc::unbounded_channel();
+        let abort_clone = self.abort_rx.clone();
+        let working_dir = self.git.worktree_dir();
+        let provider_clone = self.provider.clone();
+
+        let task = tokio::spawn(async move {
+            provider_clone
+                .run(&working_dir, &prompt, None, None, output_tx, abort_clone)
+                .await
+        });
+
+        while let Some(output) = output_rx.recv().await {
+            match output {
+                AiOutput::Text(text) => {
+                    self.emit_event(SessionEventPayload::AiContent {
+                        block: AiContentBlock::Text { text },
+                    });
+                }
+                AiOutput::ToolUse { tool_id, tool } => {
+                    self.emit_event(SessionEventPayload::AiContent {
+                        block: AiContentBlock::ToolUse { tool_id, tool },
+                    });
+                }
+                AiOutput::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    self.emit_event(SessionEventPayload::AiContent {
+                        block: AiContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        },
+                    });
+                }
+                AiOutput::Finished {
+                    duration_secs,
+                    cost_usd,
+                } => {
+                    let cost_str = cost_usd
+                        .map(|c| format!(" | cost: ${:.4}", c))
+                        .unwrap_or_default();
                     self.emit_log(
                         LogCategory::Script,
                         format!(
-                            "Rebase failed — invoking AI to resolve (attempt {}/{})...",
-                            attempt, max_attempts
+                            "--- {} finished in {:.1}s{} ---",
+                            label, duration_secs, cost_str
                         ),
                     );
-
-                    let conflict_prompt = format!(
-                        "A git rebase in this repo failed.\n\n\
-                         The error output was:\n{}\n\n\
-                         Diagnose the issue from the error above. If there are merge conflicts, \
-                         resolve them, stage the files, and run 'git rebase --continue'. \
-                         If the error is something else (e.g. unstaged changes, dirty worktree), \
-                         fix that first. Do not abort the rebase.",
-                        error_output
-                    );
-
-                    let (output_tx, mut output_rx) = mpsc::unbounded_channel();
-                    let abort_clone = self.abort_rx.clone();
-                    let working_dir = self.git.worktree_dir();
-                    let provider_clone = self.provider.clone();
-
-                    let resolve_task = tokio::spawn(async move {
-                        provider_clone
-                            .run(
-                                &working_dir,
-                                &conflict_prompt,
-                                None,
-                                None,
-                                output_tx,
-                                abort_clone,
-                            )
-                            .await
-                    });
-
-                    while let Some(output) = output_rx.recv().await {
-                        match output {
-                            AiOutput::Text(text) => {
-                                self.emit_event(SessionEventPayload::AiContent {
-                                    block: AiContentBlock::Text { text },
-                                });
-                            }
-                            AiOutput::ToolUse { tool_id, tool } => {
-                                self.emit_event(SessionEventPayload::AiContent {
-                                    block: AiContentBlock::ToolUse { tool_id, tool },
-                                });
-                            }
-                            AiOutput::ToolResult {
-                                tool_use_id,
-                                content,
-                                is_error,
-                            } => {
-                                self.emit_event(SessionEventPayload::AiContent {
-                                    block: AiContentBlock::ToolResult {
-                                        tool_use_id,
-                                        content,
-                                        is_error,
-                                    },
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    resolve_task.await.ok();
-
-                    if !self.git.has_active_rebase() {
-                        break;
-                    }
-
-                    if attempt == max_attempts {
-                        self.emit_log(
-                            LogCategory::Error,
-                            "Failed to resolve rebase after max attempts. Aborting rebase."
-                                .to_string(),
-                        );
-                        self.git.abort_rebase().await.ok();
-                        return Err(RunError::Transient(format!(
-                            "Rebase conflict resolution failed after {} attempts (rebase aborted)",
-                            max_attempts
-                        )));
-                    }
                 }
-
-                if !self.git.verify_main_is_ancestor().await.unwrap_or(false) {
-                    return Err(RunError::Permanent(
-                        "After rebase, origin/main is not an ancestor of HEAD".to_string(),
-                    ));
+                AiOutput::Error(e) => self.emit_log(LogCategory::Error, e),
+                AiOutput::RateLimited { message } => {
+                    self.emit_event(SessionEventPayload::RateLimited { message });
                 }
+                AiOutput::SessionId(_) => {}
+            }
+        }
 
-                Ok(())
+        match task.await {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                self.emit_log(LogCategory::Error, format!("{} failed: {}", label, e));
+                false
+            }
+            Err(e) => {
+                self.emit_log(LogCategory::Error, format!("{} panicked: {}", label, e));
+                false
             }
         }
     }
@@ -1281,6 +1256,7 @@ mod tests {
         active_rebase: Mutex<bool>,
         head_sha: Mutex<String>,
         head_changed_val: Mutex<bool>,
+        main_ancestor_val: Mutex<bool>,
         rebase_results: Mutex<Vec<Result<String, RebaseError>>>,
     }
 
@@ -1291,12 +1267,17 @@ mod tests {
                 active_rebase: Mutex::new(false),
                 head_sha: Mutex::new("abc123".to_string()),
                 head_changed_val: Mutex::new(true),
+                main_ancestor_val: Mutex::new(true),
                 rebase_results: Mutex::new(Vec::new()),
             }
         }
 
         fn set_head_changed(&self, val: bool) {
             *self.head_changed_val.lock().unwrap() = val;
+        }
+
+        fn set_main_ancestor(&self, val: bool) {
+            *self.main_ancestor_val.lock().unwrap() = val;
         }
 
         fn push_rebase_result(&self, result: Result<String, RebaseError>) {
@@ -1354,7 +1335,7 @@ mod tests {
             Ok(String::new())
         }
         async fn verify_main_is_ancestor(&self) -> anyhow::Result<bool> {
-            Ok(true)
+            Ok(*self.main_ancestor_val.lock().unwrap())
         }
         async fn run_in_worktree(&self, _args: &[&str]) -> Result<String, String> {
             Ok(String::new())
@@ -1564,34 +1545,167 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transient_rebase_error_retries_next_iteration() {
+    async fn rebase_failure_warns_then_delegates_to_ai_agent() {
+        // First rebase call (pre-AI) fails. The new flow aborts the rebase
+        // and runs an AI agent. With main_ancestor still true (default), the
+        // AI is treated as having succeeded and the iteration continues —
+        // crucially, the user is NOT prompted via ActionRequired.
         let git = TestGitOps::new();
-        // First rebase call (pre-AI) returns a permanent error, recovery rebase also fails,
-        // then AI recovery rebase also fails with conflict -> transient
-        git.push_rebase_result(Err(RebaseError::Permanent("lock fail".to_string())));
-        // After heal_git_state, retry rebase:
-        git.push_rebase_result(Err(RebaseError::Permanent("still broken".to_string())));
-        // After AI recovery, retry rebase:
-        git.push_rebase_result(Err(RebaseError::Conflict("conflict".to_string())));
+        git.push_rebase_result(Err(RebaseError::Conflict("merge conflict".to_string())));
+
+        let config = default_config();
+        let mut ctx = default_context();
+        // Avoid loading a prompt file from disk in the iteration's AI step;
+        // we only care about the rebase-step behavior here.
+        ctx.ai_session_id = Some("resume-rebase-test".to_string());
+
+        let events = run_machine_with(&git, &config, ctx, false).await;
+
+        let has_delegation_warning = events.iter().any(|e| {
+            matches!(e, SessionEventPayload::Log {
+                category: LogCategory::Warning,
+                text,
+            } if text.contains("delegating to AI"))
+        });
+        assert!(
+            has_delegation_warning,
+            "Should warn that the rebase is being delegated to the AI agent"
+        );
+
+        // The recovered rebase must NOT prompt the user when the agent
+        // succeeds — that's the whole point of the new flow.
+        let has_action_required = events
+            .iter()
+            .any(|e| matches!(e, SessionEventPayload::ActionRequired { .. }));
+        assert!(
+            !has_action_required,
+            "Successful agent recovery must not surface the multi-choice prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebase_failure_with_unsuccessful_ai_emits_action_required() {
+        // Rebase fails AND the agent fails to leave the branch rebased.
+        // Expected: machine routes to WaitingForRecovery, emitting an
+        // ActionRequired event so the user can choose Stash / Commit /
+        // HardReset / Abort.
+        let git = TestGitOps::new();
+        git.push_rebase_result(Err(RebaseError::Conflict("stubborn conflict".to_string())));
+        git.set_main_ancestor(false);
 
         let config = default_config();
         let ctx = default_context();
 
-        let events = run_machine_with(&git, &config, ctx, false).await;
-
-        // Should have logged about rebase failure
-        let has_rebase_warning = events.iter().any(|e| {
-            if let SessionEventPayload::Log {
-                category: LogCategory::Warning,
-                text,
-            } = e
-            {
-                text.contains("rebase") || text.contains("Rebase")
-            } else {
-                false
-            }
+        // Use a separate channel so we can drop the action_tx, causing
+        // action_rx.recv() to return None and the machine to fail cleanly.
+        let provider: Arc<dyn AiProvider> = Arc::new(TestAiProvider);
+        let events: Arc<Mutex<Vec<SessionEventPayload>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let emit: Box<dyn Fn(SessionEvent) + Send + Sync> = Box::new(move |event: SessionEvent| {
+            events_clone.lock().unwrap().push(event.payload);
         });
-        assert!(has_rebase_warning, "Should warn about rebase issues");
+        let emit_ref: &'static (dyn Fn(SessionEvent) + Send + Sync) = Box::leak(emit);
+
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (_abort_tx, abort_rx) = watch::channel(false);
+        let (action_tx, action_rx) = mpsc::channel(1);
+        // Drop action_tx — recv() will return None and WaitingForRecovery
+        // treats that as Abort, ending the machine deterministically.
+        drop(action_tx);
+
+        let mut machine = SessionMachine::new(
+            "test-session".to_string(),
+            &config,
+            &git,
+            provider,
+            emit_ref,
+            stop_rx,
+            abort_rx,
+            action_rx,
+            ctx,
+        );
+        machine.run().await;
+
+        let events = events.lock().unwrap().clone();
+        let has_action_required = events
+            .iter()
+            .any(|e| matches!(e, SessionEventPayload::ActionRequired { .. }));
+        assert!(
+            has_action_required,
+            "Failed-rebase + failed-AI must surface a multi-choice prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_ai_rebase_failure_also_prompts_user() {
+        // Pre-AI rebase succeeds (no result pushed → default Ok). AI commits.
+        // Post-AI rebase fails AND the agent fails to recover. Verify the
+        // user is prompted in the post-AI step too — previously this step
+        // silently dropped the iteration on the floor.
+        let git = TestGitOps::new();
+        // Skip the first (pre-AI) rebase call by leaving the queue empty —
+        // that returns Ok. Stage failure for the post-AI call.
+        git.push_rebase_result(Ok(String::new()));
+        git.push_rebase_result(Err(RebaseError::Conflict("post-ai conflict".to_string())));
+        // Make the agent's run look like it didn't actually rebase.
+        git.set_main_ancestor(false);
+
+        let config = default_config();
+        let mut ctx = default_context();
+        // Skip the prompt-file load in the AI step; we want to reach
+        // do_rebase_post_ai, not stub out the whole iteration.
+        ctx.ai_session_id = Some("resume-post-ai-test".to_string());
+
+        let provider: Arc<dyn AiProvider> = Arc::new(TestAiProvider);
+        let events: Arc<Mutex<Vec<SessionEventPayload>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let emit: Box<dyn Fn(SessionEvent) + Send + Sync> = Box::new(move |event: SessionEvent| {
+            events_clone.lock().unwrap().push(event.payload);
+        });
+        let emit_ref: &'static (dyn Fn(SessionEvent) + Send + Sync) = Box::leak(emit);
+
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (_abort_tx, abort_rx) = watch::channel(false);
+        let (action_tx, action_rx) = mpsc::channel(1);
+        drop(action_tx);
+
+        let mut machine = SessionMachine::new(
+            "test-session".to_string(),
+            &config,
+            &git,
+            provider,
+            emit_ref,
+            stop_rx,
+            abort_rx,
+            action_rx,
+            ctx,
+        );
+        machine.run().await;
+
+        let events = events.lock().unwrap().clone();
+        let has_post_ai_step = events.iter().any(|e| {
+            matches!(
+                e,
+                SessionEventPayload::Housekeeping {
+                    block: HousekeepingBlock::StepStarted {
+                        step: SessionStep::RebasePostAi,
+                        ..
+                    }
+                }
+            )
+        });
+        assert!(
+            has_post_ai_step,
+            "Post-AI rebase step should run before failing"
+        );
+
+        let has_action_required = events
+            .iter()
+            .any(|e| matches!(e, SessionEventPayload::ActionRequired { .. }));
+        assert!(
+            has_action_required,
+            "Post-AI rebase failure must also surface the multi-choice prompt"
+        );
     }
 
     #[tokio::test]
