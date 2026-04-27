@@ -42,7 +42,7 @@ fn copilot_known_models() -> Vec<ModelInfo> {
             is_default: false,
         },
         ModelInfo {
-            id: "gpt-5-5".into(),
+            id: "gpt-5.5".into(),
             label: "GPT-5.5".into(),
             is_default: false,
         },
@@ -246,10 +246,20 @@ fn emit_tool_use(
     });
 }
 
-/// Extract the raw patch text from an apply_patch arguments object. The exact
-/// field name varies between Copilot CLI versions, so try the known aliases
-/// before giving up.
+/// Extract the raw patch text from an apply_patch tool invocation. Copilot
+/// declares apply_patch as a FREEFORM tool, which means the model can send
+/// the arguments either as a raw string (the patch text directly) or as an
+/// object with the patch under one of several field names. We accept all of
+/// these so the renderer doesn't fall through to the `Other` branch and
+/// enumerate the patch string character-by-character.
 fn extract_patch_text(input: &serde_json::Value) -> Option<String> {
+    // Freeform / unwrapped: arguments is the patch string itself.
+    if let Some(s) = input.as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    // Wrapped: arguments is an object with the patch under a known key.
     for key in ["input", "patch", "diff", "patch_text"] {
         if let Some(s) = input.get(key).and_then(|v| v.as_str()) {
             if !s.trim().is_empty() {
@@ -572,6 +582,49 @@ mod tests {
         assert!(extract_patch_text(&v).is_some());
         let v = serde_json::json!({"unknown_field": "x"});
         assert!(extract_patch_text(&v).is_none());
+    }
+
+    /// Regression: Copilot 1.0.36+ declares apply_patch as a FREEFORM tool,
+    /// so `arguments` may arrive as a raw string rather than `{"input": ...}`.
+    /// If we don't accept that shape, the call falls through to Other and
+    /// the React renderer's `Object.entries(string)` enumerates the patch
+    /// character by index, producing "0: *, 1: *, 2: *, …" — a lot of
+    /// numbers instead of an Edit.
+    #[test]
+    fn extract_patch_text_accepts_raw_string_arguments() {
+        let v = serde_json::Value::String(
+            "*** Begin Patch\n*** Update File: a.rs\n-x\n+y\n".to_string(),
+        );
+        let extracted = extract_patch_text(&v).expect("should extract from raw-string args");
+        assert!(extracted.contains("*** Begin Patch"));
+    }
+
+    #[test]
+    fn emit_tool_use_apply_patch_freeform_string_emits_edit() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // Copilot's freeform shape: arguments is the patch string itself.
+        let input = serde_json::Value::String(
+            "*** Begin Patch\n\
+             *** Update File: src/lib.rs\n\
+             -let x = 1;\n\
+             +let x = 2;\n\
+             *** End Patch"
+                .to_string(),
+        );
+        emit_tool_use("apply_patch", "tool-3", &input, &tx);
+        drop(tx);
+
+        let mut tools = Vec::new();
+        while let Ok(out) = rx.try_recv() {
+            if let AiOutput::ToolUse { tool, .. } = out {
+                tools.push(tool);
+            }
+        }
+        assert_eq!(tools.len(), 1, "expected one Edit tool use");
+        match &tools[0] {
+            ToolInvocation::Edit { file_path, .. } => assert_eq!(file_path, "src/lib.rs"),
+            other => panic!("expected Edit, got {:?}", other),
+        }
     }
 
     #[test]
