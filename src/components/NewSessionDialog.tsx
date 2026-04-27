@@ -314,6 +314,10 @@ export function NewSessionDialog({
                           value={customModel}
                           onChange={(e) => setCustomModel(e.target.value)}
                           placeholder="Enter model name..."
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          autoComplete="off"
+                          spellCheck={false}
                         />
                         {modelConfig.models.length > 0 && (
                           <button

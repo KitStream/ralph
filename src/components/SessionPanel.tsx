@@ -13,7 +13,9 @@ export function SessionPanel({ sessionId }: SessionPanelProps) {
   const { session, start, resume, stop, cancelStop, abort, remove, toggleFoldIteration } = useSession(sessionId);
   const { state } = useSessions();
   const [shortenPaths, setShortenPaths] = useState(true);
-  const [showToolOutput, setShowToolOutput] = useState(true);
+  // Tool output is collapsed by default; the runs are noisy and most of the
+  // time the user only wants the AI's text and the housekeeping summary.
+  const [showToolOutput, setShowToolOutput] = useState(false);
 
   if (!session) {
     return (
