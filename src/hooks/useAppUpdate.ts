@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 
 export type UpdateStatus =
   | { kind: "idle" }
@@ -16,6 +17,9 @@ export function useAppUpdate() {
   const [version, setVersion] = useState<string>("");
   const [status, setStatus] = useState<UpdateStatus>({ kind: "idle" });
   const pendingUpdate = useRef<Update | null>(null);
+  // Latest checkForUpdate function held in a ref so the menu-event listener
+  // (registered once on mount) always calls the current closure.
+  const checkRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -67,6 +71,35 @@ export function useAppUpdate() {
 
   const dismiss = useCallback(() => {
     setStatus({ kind: "idle" });
+  }, []);
+
+  // Keep the ref pointing at the latest checkForUpdate so the long-lived
+  // menu-event listener below always invokes the current closure.
+  useEffect(() => {
+    checkRef.current = checkForUpdate;
+  }, [checkForUpdate]);
+
+  // Subscribe to the native menu's "Check for Updates…" item. The Rust side
+  // emits `request-check-for-updates` on click; we forward to the existing
+  // checkForUpdate flow.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    listen("request-check-for-updates", () => {
+      checkRef.current().catch(() => {});
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
   }, []);
 
   return { version, status, checkForUpdate, install, dismiss };

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { UpdateStatus } from "../hooks/useAppUpdate";
 
 interface UpdateBannerProps {
@@ -6,13 +7,25 @@ interface UpdateBannerProps {
   onDismiss: () => void;
 }
 
+const UP_TO_DATE_DISMISS_MS = 3000;
+
 export function UpdateBanner({ status, onInstall, onDismiss }: UpdateBannerProps) {
-  if (status.kind === "idle" || status.kind === "checking" || status.kind === "upToDate") {
+  // Auto-dismiss the "up to date" pill so the menu-triggered acknowledgement
+  // (and the silent startup check) doesn't linger.
+  useEffect(() => {
+    if (status.kind !== "upToDate") return;
+    const t = setTimeout(onDismiss, UP_TO_DATE_DISMISS_MS);
+    return () => clearTimeout(t);
+  }, [status, onDismiss]);
+
+  if (status.kind === "idle" || status.kind === "checking") {
     return null;
   }
 
   let content: React.ReactNode;
-  if (status.kind === "available") {
+  if (status.kind === "upToDate") {
+    content = <span>You're on the latest version.</span>;
+  } else if (status.kind === "available") {
     content = (
       <>
         <span>Update available: v{status.version}</span>
