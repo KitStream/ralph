@@ -921,8 +921,16 @@ impl<'a> SessionMachine<'a> {
     fn emit_event(&self, payload: SessionEventPayload) {
         (self.emit)(SessionEvent {
             session_id: self.session_id.clone(),
+            iteration: self.event_iteration(),
             payload,
         });
+    }
+
+    /// The iteration to stamp on outgoing events. Setup logs run before the
+    /// first `do_new_iteration` increment, so anchor them to iteration 1 to
+    /// keep persisted log files aligned with what users see.
+    fn event_iteration(&self) -> u32 {
+        self.ctx.iteration.max(1)
     }
 
     fn emit_log(&self, category: LogCategory, text: String) {
@@ -1110,9 +1118,11 @@ impl<'a> SessionMachine<'a> {
         // Extract emit to avoid holding &self across the await
         let emit_fn = self.emit;
         let sid = self.session_id.clone();
+        let iteration = self.event_iteration();
         let emit_log = move |cat: LogCategory, text: String| {
             (emit_fn)(SessionEvent {
                 session_id: sid.clone(),
+                iteration,
                 payload: SessionEventPayload::Log {
                     category: cat,
                     text,
@@ -1632,6 +1642,114 @@ mod tests {
         assert!(
             has_iteration_complete,
             "Should complete iteration without tag"
+        );
+    }
+
+    /// Capture full `SessionEvent`s (not just payloads) so tests can assert
+    /// on the iteration stamp.
+    async fn run_machine_capturing_events(
+        git: &dyn GitOperations,
+        config: &SessionConfig,
+        ctx: SessionContext,
+        stop_before_start: bool,
+    ) -> Vec<SessionEvent> {
+        let provider: Arc<dyn AiProvider> = Arc::new(TestAiProvider);
+        let events: Arc<Mutex<Vec<SessionEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let emit: Box<dyn Fn(SessionEvent) + Send + Sync> = Box::new(move |event: SessionEvent| {
+            events_clone.lock().unwrap().push(event);
+        });
+        let emit_ref: &'static (dyn Fn(SessionEvent) + Send + Sync) = Box::leak(emit);
+
+        let (stop_tx, stop_rx) = watch::channel(stop_before_start);
+        let (_abort_tx, abort_rx) = watch::channel(false);
+        let (_action_tx, action_rx) = mpsc::channel(1);
+
+        let mut machine = SessionMachine::new(
+            "test-session".to_string(),
+            config,
+            git,
+            provider,
+            emit_ref,
+            stop_rx,
+            abort_rx,
+            action_rx,
+            ctx,
+        );
+
+        if !stop_before_start {
+            let stop_tx_clone = stop_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                stop_tx_clone.send(true).ok();
+            });
+        }
+
+        machine.run().await;
+        let result = events.lock().unwrap().clone();
+        result
+    }
+
+    /// Regression: every event the machine emits must be stamped with the
+    /// machine's current iteration. This is the single source of truth that
+    /// downstream consumers (log file routing, frontend buckets) rely on. If
+    /// any future change forgets to stamp, this test catches it.
+    #[tokio::test]
+    async fn machine_stamps_iteration_on_every_event() {
+        let git = TestGitOps::new();
+        let config = default_config();
+        let ctx = default_context();
+
+        let events = run_machine_capturing_events(&git, &config, ctx, true).await;
+
+        assert!(!events.is_empty(), "machine should emit at least one event");
+        for event in &events {
+            assert!(
+                event.iteration >= 1,
+                "every event must be stamped with iteration >= 1, got {}: {:?}",
+                event.iteration,
+                event.payload
+            );
+        }
+    }
+
+    /// Regression for the resume-after-restart bug: when the machine resumes
+    /// at iteration N, every event it emits during that iteration carries
+    /// `iteration = N` — not 1, and not whatever stale state a downstream
+    /// consumer might be holding.
+    #[tokio::test]
+    async fn resumed_machine_stamps_resume_iteration() {
+        let git = TestGitOps::new();
+        let config = default_config();
+        let mut ctx = default_context();
+        ctx.iteration = 7;
+        ctx.ai_session_id = Some("resume-iter-7".to_string());
+        ctx.skip_to_step = Some(SessionStep::RunningAi);
+
+        let events = run_machine_capturing_events(&git, &config, ctx, false).await;
+
+        // Every event up to and including IterationComplete{ iteration: 7 }
+        // must be stamped 7. Events emitted after IterationComplete (i.e.,
+        // for the next iteration's setup) get stamped 8.
+        let mut saw_complete = false;
+        for event in &events {
+            if !saw_complete {
+                assert_eq!(
+                    event.iteration, 7,
+                    "pre-IterationComplete event stamped with wrong iteration: {:?}",
+                    event.payload
+                );
+            }
+            if matches!(
+                event.payload,
+                SessionEventPayload::IterationComplete { iteration: 7, .. }
+            ) {
+                saw_complete = true;
+            }
+        }
+        assert!(
+            saw_complete,
+            "machine should have completed iteration 7 in this scenario"
         );
     }
 }

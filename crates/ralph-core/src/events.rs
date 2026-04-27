@@ -5,6 +5,13 @@ use crate::session::state::{SessionStatus, SessionStep};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub session_id: String,
+    /// Iteration this event belongs to. Stamped by the session machine, which is
+    /// the single owner of the iteration counter — consumers (log routing, view
+    /// state) read this value rather than maintaining their own counter. Events
+    /// emitted outside the iteration loop carry the upcoming iteration's number
+    /// (i.e., never zero for events that are persisted).
+    #[serde(default)]
+    pub iteration: u32,
     pub payload: SessionEventPayload,
 }
 
@@ -321,6 +328,35 @@ impl HousekeepingBlock {
 mod tests {
     use super::*;
     use crate::session::state::SessionStep;
+
+    /// Regression: the iteration stamp on `SessionEvent` is what every
+    /// consumer (log routing, frontend buckets) reads, so it must round-trip
+    /// through JSON intact. If anyone makes the field non-serialized in the
+    /// future, this test fails.
+    #[test]
+    fn session_event_iteration_round_trips_through_json() {
+        let original = SessionEvent {
+            session_id: "abc".to_string(),
+            iteration: 42,
+            payload: SessionEventPayload::Log {
+                category: LogCategory::Script,
+                text: "hi".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: SessionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.iteration, 42);
+    }
+
+    /// Older persisted JSON without an `iteration` field must still decode
+    /// (defaults to 0). Otherwise, adding the field would break any consumer
+    /// that re-reads previously-emitted events.
+    #[test]
+    fn session_event_iteration_defaults_when_missing_in_json() {
+        let json = r#"{"session_id":"s","payload":{"type":"Finished","reason":"done"}}"#;
+        let decoded: SessionEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.iteration, 0);
+    }
 
     #[test]
     fn ai_content_text_summary_returns_text() {

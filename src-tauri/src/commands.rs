@@ -164,6 +164,7 @@ pub async fn stop_session(
         "session-event",
         &SessionEvent {
             session_id: session_id.clone(),
+            iteration: 0,
             payload: SessionEventPayload::StatusChanged { status },
         },
     )
@@ -186,6 +187,7 @@ pub async fn cancel_stop_session(
         "session-event",
         &SessionEvent {
             session_id: session_id.clone(),
+            iteration: 0,
             payload: SessionEventPayload::StatusChanged { status },
         },
     )
@@ -209,6 +211,7 @@ pub async fn abort_session(
         "session-event",
         &SessionEvent {
             session_id: session_id.clone(),
+            iteration: 0,
             payload: SessionEventPayload::StatusChanged { status },
         },
     )

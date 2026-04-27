@@ -132,10 +132,26 @@ pub fn parse_tool_invocation(name: &str, input: &serde_json::Value) -> ToolInvoc
         "view" => ToolInvocation::Read {
             file_path: str_field("path"),
         },
-        "edit" | "write" | "create" => ToolInvocation::Edit {
+        // Copilot's edit tool uses `old_str`/`new_str` (not the Claude-style
+        // `old_string`/`new_string`). Accept both so changes in either backend
+        // don't silently break the diff renderer.
+        "edit" => ToolInvocation::Edit {
             file_path: str_field("path"),
-            old_string: str_field("old_string"),
-            new_string: str_field("new_string"),
+            old_string: opt_str_field("old_str")
+                .or_else(|| opt_str_field("old_string"))
+                .unwrap_or_default(),
+            new_string: opt_str_field("new_str")
+                .or_else(|| opt_str_field("new_string"))
+                .unwrap_or_default(),
+        },
+        // Copilot's `create` tool writes a whole file via `file_text`; map to
+        // Write so the renderer shows it as a write rather than a diff with
+        // empty old/new strings.
+        "create" | "write" => ToolInvocation::Write {
+            file_path: str_field("path"),
+            content: opt_str_field("file_text")
+                .or_else(|| opt_str_field("content"))
+                .unwrap_or_default(),
         },
         "bash" | "terminal" => ToolInvocation::Bash {
             command: str_field("command"),

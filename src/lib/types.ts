@@ -146,6 +146,10 @@ export type ThemeMode = "Dark" | "Light";
 
 export interface SessionEvent {
   session_id: string;
+  /// Iteration this event belongs to. Stamped by the backend session machine,
+  /// which is the single owner of the iteration counter. The frontend uses
+  /// this when routing log entries into iteration buckets.
+  iteration: number;
   payload: SessionEventPayload;
 }
 

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
@@ -21,7 +21,6 @@ struct SessionHandle {
 pub struct SessionManager {
     sessions: RwLock<HashMap<SessionId, SessionHandle>>,
     log_store: SessionLogStore,
-    iteration_tracker: Mutex<HashMap<String, u32>>,
 }
 
 impl SessionManager {
@@ -49,7 +48,6 @@ impl SessionManager {
         Self {
             sessions: RwLock::new(map),
             log_store: SessionLogStore::new(persist::dirs_or_default()),
-            iteration_tracker: Mutex::new(HashMap::new()),
         }
     }
 
@@ -119,13 +117,15 @@ impl SessionManager {
             }
         };
 
-        // Log the resume attempt
+        // Log the resume attempt — stamp it with the iteration we're resuming
+        // into so it lands in the correct iteration log file.
         let step_info = resume_step
             .as_ref()
             .map(|s| format!(" at step {}", s))
             .unwrap_or_default();
         emit(SessionEvent {
             session_id: id.to_string(),
+            iteration: resume_iteration.unwrap_or(0).max(1),
             payload: SessionEventPayload::Log {
                 category: crate::events::LogCategory::Script,
                 text: format!(
@@ -393,31 +393,19 @@ impl SessionManager {
         }
         drop(sessions);
 
-        // Append loggable events to disk
+        // Append loggable events to disk. The machine stamps every event with
+        // the iteration it belongs to, so routing to the correct file requires
+        // no separate tracker — the event itself is the source of truth.
         match &event.payload {
             SessionEventPayload::Log { .. }
             | SessionEventPayload::AiContent { .. }
             | SessionEventPayload::Housekeeping { .. }
             | SessionEventPayload::RateLimited { .. }
-            | SessionEventPayload::ActionRequired { .. } => {
-                let iteration = {
-                    let tracker = self.iteration_tracker.lock().unwrap();
-                    tracker.get(id_str).copied().unwrap_or(1)
-                };
+            | SessionEventPayload::ActionRequired { .. }
+            | SessionEventPayload::IterationComplete { .. } => {
                 self.log_store
-                    .append(id_str, iteration, &event.payload)
+                    .append(id_str, event.iteration.max(1), &event.payload)
                     .ok();
-            }
-            SessionEventPayload::IterationComplete { iteration, .. } => {
-                // Write the IterationComplete event to the current iteration file
-                let current = {
-                    let tracker = self.iteration_tracker.lock().unwrap();
-                    tracker.get(id_str).copied().unwrap_or(1)
-                };
-                self.log_store.append(id_str, current, &event.payload).ok();
-                // Advance the tracker to the next iteration
-                let mut tracker = self.iteration_tracker.lock().unwrap();
-                tracker.insert(id_str.to_string(), *iteration + 1);
             }
             _ => {}
         }

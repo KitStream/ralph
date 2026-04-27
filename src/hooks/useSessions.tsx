@@ -86,11 +86,11 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, activeSessionId: action.id };
 
     case "SESSION_EVENT": {
-      const { session_id, payload } = action.event;
+      const { session_id, iteration, payload } = action.event;
       const session = state.sessions.get(session_id);
       if (!session) return state;
 
-      const updated = applyEvent(session, payload);
+      const updated = applyEvent(session, payload, iteration);
       const sessions = new Map(state.sessions);
       sessions.set(session_id, updated);
       return { ...state, sessions };
@@ -153,8 +153,8 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-function appendLogEntry(session: SessionState, entry: LogEntry): SessionState {
-  const iter = session.currentIteration;
+function appendLogEntry(session: SessionState, entry: LogEntry, iteration: number): SessionState {
+  const iter = iteration > 0 ? iteration : session.currentIteration;
   const iterationLogs = new Map(session.iterationLogs);
   const existing = iterationLogs.get(iter) ?? [];
   iterationLogs.set(iter, [...existing, entry]);
@@ -165,12 +165,22 @@ function appendLogEntry(session: SessionState, entry: LogEntry): SessionState {
     iterations[idx] = { ...iterations[idx], entry_count: iterations[idx].entry_count + 1 };
   } else {
     iterations.push({ iteration: iter, entry_count: 1 });
+    iterations.sort((a, b) => a.iteration - b.iteration);
   }
 
-  return { ...session, iterationLogs, iterations };
+  // Track the highest seen iteration so the UI's notion of "current" matches
+  // what the backend is actually emitting events into.
+  const currentIteration = iter > session.currentIteration ? iter : session.currentIteration;
+
+  return { ...session, iterationLogs, iterations, currentIteration };
 }
 
-function attachToolResult(session: SessionState, toolUseId: string, result: ToolResultData): SessionState {
+function attachToolResult(
+  session: SessionState,
+  toolUseId: string,
+  result: ToolResultData,
+  iteration: number,
+): SessionState {
   const iterationLogs = new Map(session.iterationLogs);
   for (const [iter, entries] of iterationLogs) {
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -192,7 +202,7 @@ function attachToolResult(session: SessionState, toolUseId: string, result: Tool
     timestamp: Date.now(),
     aiBlock: { kind: "ToolResult", tool_use_id: toolUseId, content: result.content, is_error: result.is_error },
   };
-  return appendLogEntry(session, fallbackEntry);
+  return appendLogEntry(session, fallbackEntry, iteration);
 }
 
 function summarizeAiBlock(block: AiContentBlock): string {
@@ -231,7 +241,8 @@ function summarizeHousekeepingBlock(block: HousekeepingBlock): string {
 
 function applyEvent(
   session: SessionState,
-  payload: SessionEventPayload
+  payload: SessionEventPayload,
+  iteration: number,
 ): SessionState {
   const wp = worktreePrefix(session.config.project_dir, session.config.branch_name);
 
@@ -248,7 +259,7 @@ function applyEvent(
         shortText: text.startsWith("Running in worktree") ? text : shortenPaths(text, wp),
         timestamp: Date.now(),
       };
-      return appendLogEntry(session, entry);
+      return appendLogEntry(session, entry, iteration);
     }
 
     case "AiContent": {
@@ -256,7 +267,7 @@ function applyEvent(
         return attachToolResult(session, payload.block.tool_use_id, {
           content: payload.block.content,
           is_error: payload.block.is_error,
-        });
+        }, iteration);
       }
       const text = summarizeAiBlock(payload.block);
       const shortBlock = shortenAiBlock(payload.block, wp);
@@ -269,7 +280,7 @@ function applyEvent(
         aiBlock: payload.block,
         shortAiBlock: shortBlock,
       };
-      return appendLogEntry(session, entry);
+      return appendLogEntry(session, entry, iteration);
     }
 
     case "Housekeeping": {
@@ -282,7 +293,7 @@ function applyEvent(
         timestamp: Date.now(),
         housekeepingBlock: payload.block,
       };
-      return appendLogEntry(session, entry);
+      return appendLogEntry(session, entry, iteration);
     }
 
     case "RateLimited":

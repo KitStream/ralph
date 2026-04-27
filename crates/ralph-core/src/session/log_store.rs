@@ -171,3 +171,85 @@ impl SessionLogStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::LogCategory;
+
+    fn log_payload(text: &str) -> SessionEventPayload {
+        SessionEventPayload::Log {
+            category: LogCategory::Script,
+            text: text.to_string(),
+        }
+    }
+
+    /// A new log_store with no prior in-memory state must still route an
+    /// append to the iteration named by the caller — never a fallback like
+    /// "1". This is the regression case: on app restart, the manager hands
+    /// the store the iteration from the event stamp and we must respect it.
+    #[test]
+    fn append_to_iteration_after_cold_start_routes_by_caller() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionLogStore::new(temp.path().to_path_buf());
+        let session = "session-cold";
+
+        // No prior state; the next iteration we emit is 6 (e.g. resumed from
+        // disk after a crash mid-iteration 6).
+        store.append(session, 6, &log_payload("first")).unwrap();
+        store.append(session, 6, &log_payload("second")).unwrap();
+
+        let recs_6 = store.read_iteration(session, 6);
+        assert_eq!(recs_6.len(), 2, "events must land in iteration 6");
+        assert!(
+            store.read_iteration(session, 1).is_empty(),
+            "no event should leak into iteration 1 (the old fallback)"
+        );
+    }
+
+    #[test]
+    fn append_creates_one_file_per_iteration() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionLogStore::new(temp.path().to_path_buf());
+        let s = "session-multi";
+
+        store.append(s, 1, &log_payload("a")).unwrap();
+        store.append(s, 1, &log_payload("b")).unwrap();
+        store.append(s, 2, &log_payload("c")).unwrap();
+        store.append(s, 4, &log_payload("d")).unwrap();
+
+        let summaries = store.list_iterations(s);
+        let counts: Vec<(u32, u32)> = summaries
+            .iter()
+            .map(|s| (s.iteration, s.entry_count))
+            .collect();
+        assert_eq!(counts, vec![(1, 2), (2, 1), (4, 1)]);
+    }
+
+    /// Re-opening an existing iteration file appends rather than overwriting,
+    /// so a resumed iteration's events land alongside the events written
+    /// before the restart. This guards the fact that we never destroy prior
+    /// records when re-routing into a known iteration.
+    #[test]
+    fn append_to_existing_iteration_preserves_prior_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = "session-resume";
+
+        // Pre-populate iteration 3 with two records.
+        {
+            let store = SessionLogStore::new(temp.path().to_path_buf());
+            store.append(s, 3, &log_payload("pre-1")).unwrap();
+            store.append(s, 3, &log_payload("pre-2")).unwrap();
+        }
+
+        // Cold-start (drop and recreate the store) and append two more.
+        {
+            let store = SessionLogStore::new(temp.path().to_path_buf());
+            store.append(s, 3, &log_payload("post-1")).unwrap();
+            store.append(s, 3, &log_payload("post-2")).unwrap();
+        }
+
+        let recs = SessionLogStore::new(temp.path().to_path_buf()).read_iteration(s, 3);
+        assert_eq!(recs.len(), 4, "all four records must be preserved");
+    }
+}
