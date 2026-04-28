@@ -84,13 +84,28 @@ impl SessionManager {
         id
     }
 
-    /// Start a session fresh (no AI resume).
+    /// Start (or continue) a session. A brand-new session begins at iteration
+    /// 1; a previously-Stopped session with completed iterations continues
+    /// from `iteration_count + 1` so users don't lose their progress when
+    /// they Stop, restart Ralph (e.g. for an upgrade), and Start again.
     pub async fn start_session(
         &self,
         id: &SessionId,
         emit: Arc<dyn Fn(SessionEvent) + Send + Sync>,
     ) -> anyhow::Result<()> {
-        self.launch_session(id, emit, None, None, None).await
+        let resume_iteration = {
+            let sessions = self.sessions.read().await;
+            sessions.get(id).and_then(|h| {
+                let n = h.info.iteration_count;
+                if n > 0 {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
+        };
+        self.launch_session(id, emit, None, None, resume_iteration)
+            .await
     }
 
     /// Resume an aborted session, passing the AI session ID for crash recovery.
@@ -194,6 +209,18 @@ impl SessionManager {
         let config = handle.info.config.clone();
         let session_id = id.clone();
 
+        // Capture the resume context for the in-memory status pre-set before
+        // ownership moves into the spawn. Hard-coding iteration: 0 here
+        // erased the iteration we're resuming into; if the app was killed
+        // (e.g. a self-update relaunch) before the machine emitted its first
+        // real StatusChanged, the on-disk state would persist as
+        // Running { Idle, 0 } → Aborted { Idle, Some(0) } on the next load,
+        // and the resumed run would silently restart at iteration 1.
+        let initial_status_step = resume_step
+            .clone()
+            .unwrap_or(crate::session::state::SessionStep::Idle);
+        let initial_status_iteration = resume_iteration.unwrap_or(0);
+
         let task = tokio::spawn(async move {
             run_session(
                 session_id,
@@ -214,8 +241,8 @@ impl SessionManager {
         handle.action_tx = Some(action_tx);
         handle.task = Some(task);
         handle.info.status = SessionStatus::Running {
-            step: crate::session::state::SessionStep::Idle,
-            iteration: 0,
+            step: initial_status_step,
+            iteration: initial_status_iteration,
         };
 
         drop(sessions);

@@ -170,21 +170,33 @@ impl<'a> SessionMachine<'a> {
                 LogCategory::Script,
                 format!("Resuming at {:?} (iteration {})", step, self.ctx.iteration),
             );
-            let skip_pre_ai = matches!(
-                step,
-                SessionStep::RunningAi
-                    | SessionStep::PushBranch
-                    | SessionStep::RebasePostAi
-                    | SessionStep::PushToMain
-                    | SessionStep::Tagging
-                    | SessionStep::Paused
-            );
-            if skip_pre_ai {
-                self.emit_log(
-                    LogCategory::Script,
-                    "Skipping checkout/rebase (resuming at AI step)".to_string(),
+            if step == SessionStep::Idle {
+                // Idle is the placeholder step that `launch_session` writes
+                // into the persisted status before the machine emits its
+                // first real StatusChanged. There is no in-flight iteration
+                // to continue into, so advance the counter the same way we
+                // would on a normal new iteration.
+                self.ctx.iteration += 1;
+            } else {
+                let skip_pre_ai = matches!(
+                    step,
+                    SessionStep::RunningAi
+                        | SessionStep::PushBranch
+                        | SessionStep::RebasePostAi
+                        | SessionStep::PushToMain
+                        | SessionStep::Tagging
+                        | SessionStep::Paused
                 );
-                return IterationState::RunningAi;
+                if skip_pre_ai {
+                    self.emit_log(
+                        LogCategory::Script,
+                        "Skipping checkout/rebase (resuming at AI step)".to_string(),
+                    );
+                    return IterationState::RunningAi;
+                }
+                // Real pre-AI step (Checkout, RebasePreAi, …) — we're
+                // continuing within an iteration that already started, so
+                // don't increment.
             }
         } else {
             self.ctx.iteration += 1;
@@ -1866,6 +1878,103 @@ mod tests {
                 event.payload
             );
         }
+    }
+
+    /// Regression: an Idle skip_to_step is a placeholder from launch_session
+    /// — it must always advance the iteration counter, regardless of the
+    /// resumed value. Otherwise a fresh-start crash during launch_session's
+    /// pre-emit window would resume at iteration 0 and silently route events
+    /// into iteration-1's bucket.
+    #[tokio::test]
+    async fn idle_skip_step_advances_iteration() {
+        let git = TestGitOps::new();
+        let config = default_config();
+        let mut ctx = default_context();
+        ctx.iteration = 0;
+        ctx.skip_to_step = Some(SessionStep::Idle);
+        ctx.ai_session_id = Some("resume-stub".to_string());
+
+        let events = run_machine_capturing_events(&git, &config, ctx, false).await;
+
+        for event in &events {
+            if let SessionEventPayload::StatusChanged {
+                status: SessionStatus::Running { iteration, .. },
+            } = &event.payload
+            {
+                assert!(
+                    *iteration >= 1,
+                    "Running status leaked iteration 0: {:?}",
+                    event.payload
+                );
+            }
+        }
+    }
+
+    /// Regression: clicking Start on a cleanly-Stopped session that has
+    /// `iteration_count = N > 0` must continue at iteration N+1, not reset
+    /// back to 1. The session manager passes iteration_count as
+    /// resume_iteration; the machine's do_new_iteration with skip_to_step=
+    /// None then increments to N+1 as expected.
+    #[tokio::test]
+    async fn start_after_stopped_continues_from_iteration_count() {
+        let git = TestGitOps::new();
+        let config = default_config();
+        let mut ctx = default_context();
+        // Simulate `start_session` having read iteration_count=145 and
+        // passed it as resume_iteration without a resume_step.
+        ctx.iteration = 145;
+        ctx.skip_to_step = None;
+
+        let events = run_machine_capturing_events(&git, &config, ctx, false).await;
+
+        // The first Running status emitted must reference iteration 146, not
+        // 1 and not 145 (which already completed).
+        let first_running = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                SessionEventPayload::StatusChanged {
+                    status: SessionStatus::Running { iteration, .. },
+                } => Some(*iteration),
+                _ => None,
+            })
+            .expect("expected at least one Running status");
+        assert_eq!(
+            first_running, 146,
+            "Start on Stopped(iteration_count=145) should continue at 146, not {}",
+            first_running
+        );
+    }
+
+    /// Regression: an Idle skip_to_step at a non-zero iteration also
+    /// advances. This covers the case where a clean-stop's Start invocation
+    /// gets killed during launch_session's pre-emit window — the persisted
+    /// state becomes Aborted{Idle, Some(iteration_count)}, and the next
+    /// resume must increment past iteration_count rather than re-running it.
+    #[tokio::test]
+    async fn idle_skip_step_advances_from_nonzero_iteration() {
+        let git = TestGitOps::new();
+        let config = default_config();
+        let mut ctx = default_context();
+        ctx.iteration = 145;
+        ctx.skip_to_step = Some(SessionStep::Idle);
+        ctx.ai_session_id = Some("resume-stub".to_string());
+
+        let events = run_machine_capturing_events(&git, &config, ctx, false).await;
+
+        let first_running = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                SessionEventPayload::StatusChanged {
+                    status: SessionStatus::Running { iteration, .. },
+                } => Some(*iteration),
+                _ => None,
+            })
+            .expect("expected at least one Running status");
+        assert_eq!(
+            first_running, 146,
+            "Idle resume at iteration 145 should advance to 146, got {}",
+            first_running
+        );
     }
 
     /// Regression for the resume-after-restart bug: when the machine resumes
